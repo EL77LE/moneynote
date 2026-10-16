@@ -38,6 +38,16 @@ app/ios/Flutter/flutter_export_environment.sh
 # 插件自动生成的注册代码
 app/**/GeneratedPluginRegistrant.*
 
+# ---------- 一键交付（scripts/deploy.mjs）----------
+# secrets/ 里放的是 GitHub 令牌（secrets/token.txt），**绝对不能提交**。
+# 它等价于你 GitHub 账号的写权限：谁拿到谁就能往你仓库里推代码、
+# 也能读你的私有仓库。一旦进了公开仓库的历史，就算删掉也还能被翻出来。
+secrets/
+
+# dist/ 是下载下来的录屏和截图（几十 MB 的 mp4）。
+# 它是"产物"不是"源码"，每次跑都能重新生成，没有版本控制的意义。
+dist/
+
 # ---------- 编辑器 / 系统 ----------
 .idea/
 .vscode/
