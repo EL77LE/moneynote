@@ -257,19 +257,131 @@ function checkEnvironment() {
   return token;
 }
 
+/**
+ * 问用户要令牌时显示的那行提示。
+ *
+ * ⚠️⚠️ **它必须写进 stderr，绝不能写 stdout。**
+ *
+ * 这是本项目最阴的一个 bug，值得完整记下来：
+ *
+ * `askForTokenSync()` 起了一个子进程，用 `stdio: ['inherit','pipe','inherit']`
+ * 让**子进程的 stdout 被管道捕获**，父进程再从 `r.stdout` 里取出用户粘贴的令牌。
+ * 而子进程顺手把自己那句提示语也 `process.stdout.write()` 到了 stdout ——
+ * 于是提示语和令牌被拼成了一串，一起当成令牌用了：
+ *
+ *     secrets/token.txt 里实际存的是：
+ *     「把刚刚复制的那串粘贴到这里，然后按回车：⏎  > ghp_xxxxxxxx…」
+ *
+ * 用户看到的现象是一句莫名其妙的
+ *   Cannot convert argument to a ByteString because the character at index 7
+ *   has a value of 25226 which is greater than 255
+ * 然后**用户粘的其实是完全正确的令牌**，他却会以为是自己复制错了，
+ * 反复去 GitHub 重新签发 —— 而问题在这行提示语上，和他一点关系都没有。
+ *
+ * 修法：提示语走 stderr（stderr 配的是 'inherit'，直接进控制台，不进管道），
+ * stdout 里就只剩下用户粘的那串了。
+ *
+ * 下面 loadOrAskToken() 里还有一段"修复历史污染"的代码，
+ * 用来救回已经被这个 bug 写坏的文件（令牌在 GitHub 上只显示一次，
+ * 不救回来用户就得重新签发一个）。
+ */
+const TOKEN_PROMPT = '  把刚刚复制的那串粘贴到这里，然后按回车：\n  > ';
+
+/**
+ * 检查一串字符**长得像不像** GitHub 令牌。像 → 返回 null；不像 → 返回一句人话。
+ *
+ * **为什么必须有这一步**（这是真踩出来的，不是防患于未然）：
+ * 2026-10-16 第一次真跑，用户把一段**中文说明**粘进了令牌输入框。
+ * 脚本当时照单全收，一路走到 fetch 才炸，报的是：
+ *
+ *   Cannot convert argument to a ByteString because the character at index 7
+ *   has a value of 25226 which is greater than 255
+ *
+ * 然后这句又被网络层的 catch 接住，显示成「检查一下网络」——
+ * 和真实原因差了十万八千里，白白浪费一轮排查。
+ *
+ * 关键知识：**Node 的 fetch 在"设置请求头"时就会逐字节检查，非 ASCII 直接抛
+ * TypeError**，这时候一个包都还没发出去。所以凡是带 ByteString 的报错，
+ * 永远不可能是网络问题 —— 只能是令牌（或别的请求头）里混进了非法字符。
+ *
+ * 检查顺序不能反：先查空白，再查非 ASCII。
+ * 因为制表符(0x09)、换行(0x0A)本身就在 ASCII 范围外，
+ * 先查非 ASCII 的话，一个混了换行的令牌会被报成"里面有中文字符"，又误导人。
+ */
+function tokenProblem(raw) {
+  const t = (raw ?? '').trim();
+  if (!t) return '它是空的。';
+  if (/\s/.test(t)) return '中间混进了空格、制表符或换行。';
+
+  if (/[^\x20-\x7E]/.test(t)) {
+    const bad = [...t].find((c) => c.codePointAt(0) > 255) ?? '?';
+    return `里面有非 ASCII 字符（第一个是「${bad}」）——这看起来是**一段话**，不是令牌。`;
+  }
+
+  // 真实令牌长度：classic PAT 是 40 字符。给到 20 是为了
+  // "复制了一半"这种最常见的情况也能被拦住，同时不误伤将来的格式变化。
+  if (t.length < 20) return `只有 ${t.length} 个字符，太短了 —— 多半只复制到一半。`;
+
+  if (!/^(ghp_|github_pat_)/.test(t)) {
+    return '不是 GitHub 令牌的样子（应该以 ghp_ 或 github_pat_ 开头）。';
+  }
+  return null;
+}
+
+/** 提示用户去哪儿重新拿一个令牌。多处失败路径共用，避免文案漂移。 */
+function tokenHelp() {
+  info('重新拿一个令牌：');
+  info('  https://github.com/settings/tokens/new?scopes=repo,workflow&description=MoneyNote-oneclick');
+  info('注意：要复制的是页面**顶部出现的那串字符**旁边的小复制按钮；');
+  info('不要把页面上的说明文字选中复制 —— 那是中文，粘进来必然失败。');
+}
+
 /** 读令牌；没有就问用户要一次，然后存起来。 */
 function loadOrAskToken() {
+  // 不管令牌从哪儿来（环境变量、文件、现场粘贴），**一律先过格式检查**。
+  // 漏掉任何一条路径，就等于留了一个"要跑到 fetch 才炸"的后门。
   const fromEnv = (process.env.GITHUB_TOKEN ?? '').trim();
   if (fromEnv) {
+    const p = tokenProblem(fromEnv);
+    if (p) {
+      fail(`环境变量 GITHUB_TOKEN 里放的不是 GitHub 令牌：${p}`);
+      return null;
+    }
     info('用的是环境变量 GITHUB_TOKEN');
     return fromEnv;
   }
 
   if (existsSync(TOKEN_FILE)) {
-    const t = readFileSync(TOKEN_FILE, 'utf8').trim();
+    let t = readFileSync(TOKEN_FILE, 'utf8').trim();
+
+    // 救回被旧版本 bug 写坏的文件：提示语 + 令牌被拼在了一起。
+    // 只剥离**本脚本自己那句提示语**这个已知前缀，不做任何"猜其中一个 ghp_ 出来"
+    // 之类的聪明事 —— 那种做法会掩盖真正的错误。
+    // 详见 TOKEN_PROMPT 上面那段注释。
+    const promptPrefix = TOKEN_PROMPT.trim();
+    if (t.startsWith(promptPrefix)) {
+      t = t.slice(promptPrefix.length).trim();
+      warn('secrets/token.txt 里混进了一段提示语（脚本旧版本的 bug），已经自动剥离。');
+      // 顺手把干净的版本写回去，下次就不用再剥离一遍
+      try {
+        writeFileSync(TOKEN_FILE, t + '\n', 'utf8');
+      } catch {
+        /* 写不回去也不影响本次运行，最多下次再剥一遍 */
+      }
+    }
+
     if (t) {
-      info(`从 secrets/token.txt 读到令牌 ${mask(t)}（以后不用再输了）`);
-      return t;
+      const p = tokenProblem(t);
+      if (!p) {
+        info(`从 secrets/token.txt 读到令牌 ${mask(t)}（以后不用再输了）`);
+        return t;
+      }
+      // 存过、但存的是坏的。
+      // **这里不直接失败退出** —— 让用户重新粘一次就好了，没必要让他先去手动删文件。
+      // 重新粘成功后会把坏内容**覆盖掉**，所以也不需要清理。
+      warn(`secrets/token.txt 里的内容不是令牌：${p}`);
+      info('（这是上次粘贴时写进去的，重新粘一次就会覆盖它。）');
+      console.log('');
     }
   }
 
@@ -323,30 +435,48 @@ function loadOrAskToken() {
  * 主线逻辑保持同步，好读也好改。
  */
 function askForTokenSync() {
-  const r = spawnSync(
-    process.execPath,
-    [
-      '-e',
-      [
-        'const rl = require("readline").createInterface({ input: process.stdin, output: process.stdout });',
-        'process.stdout.write("  把刚刚复制的那串粘贴到这里，然后按回车：\\n  > ");',
-        'rl.once("line", (l) => { rl.close(); process.stdout.write(l.trim()); });',
-      ].join('\n'),
-    ],
-    { encoding: 'utf8', stdio: ['inherit', 'pipe', 'inherit'], shell: false },
-  );
+  // 子进程只干一件事：读一行，原样写回 stdout。
+  //
+  // ⚠️ 提示语写的是 **stderr**，不是 stdout。这一行是本次 bug 的根因修复，
+  //    理由见 TOKEN_PROMPT 上面那段注释（stdout 配的是 pipe，是父进程用来
+  //    接收令牌的通道，往里面多写一个字符都会污染令牌）。
+  //    stderr 配的是 inherit，直接进控制台，不进管道。
+  //
+  // 提示语用 JSON.stringify 注入而不是手拼字符串 —— 它里面有中文和换行，
+  // 手拼一个引号或反斜杠就容易出错，而且错了会很难看出来。
+  const childCode = [
+    'const rl = require("readline").createInterface({ input: process.stdin, output: process.stdout });',
+    `process.stderr.write(${JSON.stringify(TOKEN_PROMPT)});`,
+    'rl.once("line", (l) => { rl.close(); process.stdout.write(l.trim()); });',
+  ].join('\n');
 
-  const token = (r.stdout ?? '').trim();
+  const r = spawnSync(process.execPath, ['-e', childCode], {
+    encoding: 'utf8',
+    stdio: ['inherit', 'pipe', 'inherit'],
+    shell: false,
+  });
+
+  const raw = r.stdout ?? '';
+  const token = raw.trim();
+
+  // 哨兵：正常情况下这个管道里**只应该有令牌那一行**。
+  // 万一以后有人（包括我）又往子进程的 stdout 里写了别的东西，
+  // 这里会立刻喊出来 —— 而不是像上次那样，把污染后的字符串
+  // 一路带到 fetch 才炸，还报成"检查一下网络"。
+  if (raw.split('\n').filter((l) => l.trim() !== '').length > 1) {
+    warn('内部错误：接收令牌的通道里出现了多余的内容 —— 这是脚本自身的 bug，不是你的操作问题。');
+    info('（还是按整段处理了。请把这段话复制给 AI。）');
+  }
   console.log('');
 
-  if (!token) {
-    fail('没读到令牌。');
-    info('再运行一次这个脚本，或者手动把令牌存进 secrets/token.txt（整个文件只放那一行）。');
+  const problem = tokenProblem(token);
+  if (problem) {
+    // 硬拦。存一个坏的进去，只会让下一次运行在一模一样的地方再炸一次，
+    // 而且那时候用户已经不记得自己粘过什么了。
+    fail(`这不是一个能用的 GitHub 令牌：${problem}`);
+    tokenHelp();
+    info('（这次没有把它存进 secrets/token.txt —— 改好之后再跑一次就行。）');
     return null;
-  }
-  if (!/^(ghp_|github_pat_)/.test(token)) {
-    warn('这串字符不像 GitHub 令牌（通常以 ghp_ 或 github_pat_ 开头）。');
-    info('如果后面报 401，多半是复制的时候少了一段或者多带了空格。');
   }
 
   try {
@@ -377,9 +507,21 @@ async function api(path, { method = 'GET', body, allow404 = false, token } = {})
       body: body ? JSON.stringify(body) : undefined,
     });
   } catch (e) {
-    // 网络层就挂了（DNS、断网、被墙）
+    // ⚠️ 这一个 catch 里混着**两种毫无关系**的失败，别一锅端地都说成"检查一下网络"。
+    //
+    //   1. 真的网络问题：DNS 解析不了、断网、被墙、证书验不过。
+    //   2. 请求头里有非法字符：Node 的 fetch 在**设置请求头**时就逐字节检查，
+    //      非 ASCII 直接抛 TypeError，报文里带 "ByteString"。
+    //      这时候一个包都还没发出去，和网络半点关系都没有。
+    //
+    // 这两种原来被报成同一句话，于是"令牌里混了中文"显示成了"检查一下网络"，
+    // 排查方向整个跑偏 —— 2026-10-16 真事，就是这次。
+    const headerIssue = /ByteString|invalid header|header value/i.test(e.message ?? '');
     const err = new Error(`连不上 api.github.com：${e.message}`);
-    err.detail = '检查一下网络。如果开着代理/加速器，试着关掉再跑一次。';
+    err.detail = headerIssue
+      ? '这不是网络问题 —— 请求头里有非法字符，几乎一定是**令牌里混进了中文、空格或换行**。\n' +
+        '删掉 secrets\\token.txt 再跑一次，会让你重新粘一个。'
+      : '检查一下网络。如果开着代理/加速器，试着关掉再跑一次。';
     throw err;
   }
 
