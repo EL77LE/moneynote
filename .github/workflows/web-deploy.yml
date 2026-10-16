@@ -1,0 +1,124 @@
+name: 部署 Web 版到 GitHub Pages
+
+# 手动触发。第一次建议先用 "Run workflow" 单独跑一遍看日志，
+# 确认没问题了再打开下面 push 的自动触发。
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/web-deploy.yml'
+
+# GitHub Pages 官方部署方式要求的三件套权限，缺一不可：
+#   contents: read  —— 读代码
+#   pages: write    —— 写 Pages
+#   id-token: write —— 用 OIDC 令牌换部署凭证（不再需要手动配 secret）
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# 同时间只允许一个部署在跑；新的推上来时，取消排队中的旧任务，
+# 但**不取消**正在执行的那个 —— 部署跑到一半被打断会留下半截站点。
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # 这里**钉死版本号**，不写 `channel: stable`。
+      #
+      # 写 stable 的意思是"装当时最新的稳定版"。听着省事，实际是个坑：
+      # 你本机是 3.47.7，过了两个月 CI 上装的是 3.49，某个 API 改了签名，
+      # 构建突然红了 —— 而你一行代码都没动，会查得很痛苦。
+      # 钉死之后，CI 装的和你本机验证过的**是同一个版本**。
+      #
+      # 想升级时改这一行就行，改完本地也 `flutter upgrade` 到同版本再验证一遍。
+      - uses: subosito/flutter-action@v2
+        with:
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: 装依赖
+        working-directory: app
+        run: flutter pub get
+
+      - name: 静态检查
+        working-directory: app
+        run: flutter analyze --no-fatal-infos
+
+      - name: 跑单元测试
+        working-directory: app
+        run: flutter test
+
+      # ⚠️ 没配 API_BASE_URL 就直接失败，别往下走。
+      #
+      # 为什么必须拦：如果仓库变量没设，下面的 --dart-define=API_BASE_URL=
+      # 会展开成"空值"，App 于是回落到内置默认地址 http://localhost:3000
+      # —— 也就是**每个访客自己那台电脑**。
+      #
+      # 要命的是：这样构建照样成功、部署照样成功，Actions 上是**一颗绿勾**。
+      # 你点开站点只看到一句"连不上 http://localhost:3000"，
+      # 而失败原因藏在"一个你没设过的仓库变量"里 —— 这种"绿的失败"最难查。
+      #
+      # 所以宁可让它在这一步红掉，并且直接告诉你该去哪儿设。
+      - name: 检查 API_BASE_URL 是否已配置
+        run: |
+          if [ -z "${{ vars.API_BASE_URL }}" ]; then
+            echo "::error::仓库变量 API_BASE_URL 没有设置（或为空），构建出来的站点会是坏的。"
+            echo "去仓库 Settings → Secrets and variables → Actions → Variables 新建一个："
+            echo "  Name  = API_BASE_URL"
+            echo "  Value = https://你的后端域名        （必须是 https，末尾不要加斜杠）"
+            exit 1
+          fi
+          echo "API_BASE_URL = ${{ vars.API_BASE_URL }}"
+
+      # ⚠️ 两个关键参数，少一个站点就是坏的：
+      #
+      #   --base-href
+      #     GitHub Pages 的项目站点地址是 https://<用户名>.github.io/<仓库名>/，
+      #     不是域名根目录。不加这个参数，index.html 会去 /main.dart.js 找
+      #     脚本（根目录），实际文件在 /<仓库名>/main.dart.js —— 结果就是
+      #     一个永远白屏的页面，而且控制台报的是 404，很容易误判成部署失败。
+      #
+      #   --dart-define=API_BASE_URL
+      #     前端地址在 Pages 上，后端在别处，编译期必须写死。
+      #     注意必须是 https —— Pages 给的是 https 域名，
+      #     浏览器会拦截 https 页面发出的 http 请求（混合内容策略）。
+      #
+      # ${{ vars.API_BASE_URL }} 读的是仓库的 Actions Variable
+      # （Settings → Secrets and variables → Actions → Variables），
+      # 不是 Secret。它不是敏感信息，写成 Variable 更透明、日志里也能看见。
+      - name: 构建 Web 版
+        working-directory: app
+        run: |
+          flutter build web \
+            --release \
+            --base-href "/${{ github.event.repository.name }}/" \
+            --no-web-resources-cdn \
+            --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+      # --no-web-resources-cdn 是给国内访问准备的，别删：
+      # 默认情况下 Flutter 会去 Google 的 gstatic.com 下载 CanvasKit 渲染引擎，
+      # 而 gstatic 在国内打不开 —— 结果是**一整个白屏**，什么都看不到。
+      # 加上这个参数，引擎就打包进 build/web/canvaskit/，跟着站点一起发。
+      # 详见 docs/12-部署到网页端.md 第 7 节。
+
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: app/build/web
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

@@ -1,0 +1,26 @@
+# Render 部署配置（可选步骤，只在你需要「公网可访问的链接」时才用）
+#
+# 用法：把整个仓库推到 GitHub，然后在 Render 里选 New -> Blueprint，
+# 指向这个仓库，它会自动读到本文件。
+#
+# ⚠️ 免费档的磁盘是临时的：重新部署后 SQLite 数据会清空。
+#    录屏演示够用了（重新跑一次 seed 即可），别放真实数据。
+services:
+  - type: web
+    name: moneynote-api
+    runtime: node
+    plan: free
+    region: singapore # 离国内最近的节点
+    rootDir: backend
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /api/health
+    envVars:
+      - key: NODE_VERSION
+        value: '24'
+      # 空库时自动补一批演示数据（见 src/server.js 的 seedIfEmpty）。
+      # 免费档磁盘是临时的，重启就清空 —— 没有这个开关，
+      # 面试官点开 App 看到的是一个空账本，会以为项目是坏的。
+      # 只在空库时动手，不会清掉已有数据。
+      - key: AUTO_SEED
+        value: '1'

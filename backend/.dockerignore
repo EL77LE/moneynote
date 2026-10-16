@@ -1,0 +1,31 @@
+# 打镜像时不该进容器的东西。
+#
+# 加这个文件之前，Dockerfile 里的 `COPY . .` 会把下面这些都拷进镜像：
+#
+#   node_modules/  —— 你本机装的那份依赖。它会**覆盖**掉镜像里
+#                     `npm ci --omit=dev` 装好的那一份。本机是 Windows、
+#                     镜像是 Alpine Linux，等于拿另一套平台的产物去跑。
+#                     现在依赖只有 express 和 cors（纯 JS）所以多半还能跑，
+#                     但只要以后引入任何一个带原生模块的包，就会在
+#                     容器里报"模块无法加载"——
+#                     而且报错会指向你的代码，不指向这个原因。
+#
+#   data/          —— 你本机那个 moneynote.db。它会被**烤进镜像**，
+#                     于是任何人拿到这个镜像，都带着你的账本数据。
+#                     演示数据倒无所谓，但这属于"不该发生的事"。
+#                     正确的做法是用 volume 挂 /app/data（见 docs/06）。
+#
+#   .env           —— 环境变量。**这条最要命**：镜像层是能被别人
+#                     `docker history` 翻出来的，写进去的密钥等于公开。
+#
+node_modules
+data
+
+# 编辑器和系统留下的一堆杂物
+npm-debug.log*
+.git
+.gitignore
+.env
+.env.*
+!.env.example
+*.md

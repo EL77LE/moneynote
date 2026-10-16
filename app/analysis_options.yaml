@@ -1,0 +1,27 @@
+analyzer:
+  exclude:
+    - build/**
+    - web/**
+    - android/**
+    - ios/**
+include: package:flutter_lints/flutter.yaml
+
+# 额外打开的规则。只挑"能抓到真问题"的，不挑纯风格偏好。
+#
+# 刻意没有打开 prefer_const_constructors / prefer_final_locals 这类：
+# 它们属于代码风格建议，只会产出 info 级别的提示，
+# 打开后一堆噪音会把真正的 error 淹没掉。
+linter:
+  rules:
+    # 忘了写返回值类型 —— 影响可读性和文档生成
+    always_declare_return_types: true
+
+    # await 之后再用 BuildContext —— 这是真实的崩溃来源
+    # （widget 已经销毁，context 失效）
+    use_build_context_synchronously: true
+
+    # 调试用的 print 混进生产代码
+    avoid_print: true
+
+    # 空的 catch 块吞掉异常
+    empty_catches: true

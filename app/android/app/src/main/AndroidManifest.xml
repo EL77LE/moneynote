@@ -1,0 +1,68 @@
+<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+    <!-- 联网权限。
+         这一行**必须**放在 main 里，不能只在 debug/ 里放。
+         Flutter 模板默认只给 debug 和 profile 加了这一条（因为它自己要用），
+         main 里是没有的 —— 于是调试期一切正常，一打 release 包就没网络，
+         而且报的是"连不上"，看起来像后端挂了，极难定位。
+         这是本项目踩过的坑之一，详见 docs/09-排错速查.md。 -->
+    <uses-permission android:name="android.permission.INTERNET"/>
+
+    <!-- 允许明文 HTTP。
+         为什么需要：Android 9（API 28）起默认禁止 cleartext，
+         也就是 `http://` 的请求会被系统直接掐断。
+         而本项目的后端在开发和演示时就是 http（10.0.2.2 或局域网 IP），
+         不加这一条，App 装了也连不上，报错还是含糊的"连不上"。
+
+         **这是给演示用的，不是生产环境的正确做法。**
+         真上线应该把后端起 https，然后把这一行删掉。
+         面试官如果问"这样安全吗"，答案就在 docs/08-面试准备.md 的 Q13：
+         明文传输意味着同网络下可被嗅探，正规做法是 HTTPS + 证书校验。
+
+         更讲究的写法是用 network_security_config.xml 只对
+         10.0.2.2 / localhost 这类调试地址放行，其余仍然强制 https。
+         这里为了演示简单直接全局放开了，项目里记一笔。 -->
+    <application
+        android:label="MoneyNote"
+        android:name="${applicationName}"
+        android:icon="@mipmap/ic_launcher"
+        android:usesCleartextTraffic="true">
+        <activity
+            android:name=".MainActivity"
+            android:exported="true"
+            android:launchMode="singleTop"
+            android:taskAffinity=""
+            android:theme="@style/LaunchTheme"
+            android:configChanges="orientation|keyboardHidden|keyboard|screenSize|smallestScreenSize|locale|layoutDirection|fontScale|screenLayout|density|uiMode"
+            android:hardwareAccelerated="true"
+            android:windowSoftInputMode="adjustResize">
+            <!-- Specifies an Android theme to apply to this Activity as soon as
+                 the Android process has started. This theme is visible to the user
+                 while the Flutter UI initializes. After that, this theme continues
+                 to determine the Window background behind the Flutter UI. -->
+            <meta-data
+              android:name="io.flutter.embedding.android.NormalTheme"
+              android:resource="@style/NormalTheme"
+              />
+            <intent-filter>
+                <action android:name="android.intent.action.MAIN"/>
+                <category android:name="android.intent.category.LAUNCHER"/>
+            </intent-filter>
+        </activity>
+        <!-- Don't delete the meta-data below.
+             This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
+        <meta-data
+            android:name="flutterEmbedding"
+            android:value="2" />
+    </application>
+    <!-- Required to query activities that can process text, see:
+         https://developer.android.com/training/package-visibility and
+         https://developer.android.com/reference/android/content/Intent#ACTION_PROCESS_TEXT.
+
+         In particular, this is used by the Flutter engine in io.flutter.plugin.text.ProcessTextPlugin. -->
+    <queries>
+        <intent>
+            <action android:name="android.intent.action.PROCESS_TEXT"/>
+            <data android:mimeType="text/plain"/>
+        </intent>
+    </queries>
+</manifest>

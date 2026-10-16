@@ -1,0 +1,49 @@
+# ---------- 后端 ----------
+node_modules/
+backend/data/
+*.db
+*.db-wal
+*.db-shm
+.env
+
+# ---------- Flutter ----------
+app/.dart_tool/
+app/.flutter-plugins
+app/.flutter-plugins-dependencies
+app/.packages
+app/build/
+
+# 注意：app/pubspec.lock **故意不忽略**，要提交上去。
+# 它锁定每个依赖的确切版本。App 是"应用"不是"库"，提交它才能保证
+# 你本机、GitHub Actions、别人 clone 下来装到的是同一套版本 ——
+# 否则某天 http 包发新版改了行为，你的构建忽然就红了，
+# 而你什么都没改，会查得很痛苦。
+# （写库的时候反过来：不提交 lock，否则会把版本强加给使用者。）
+
+# Android
+app/android/.gradle/
+app/android/local.properties
+app/android/key.properties
+app/android/app/*.jks
+app/android/app/*.keystore
+
+# iOS
+app/ios/Pods/
+app/ios/.symlinks/
+app/ios/Flutter/Flutter.framework
+app/ios/Flutter/Flutter.podspec
+app/ios/Flutter/Generated.xcconfig
+app/ios/Flutter/flutter_export_environment.sh
+
+# 插件自动生成的注册代码
+app/**/GeneratedPluginRegistrant.*
+
+# ---------- 编辑器 / 系统 ----------
+.idea/
+.vscode/
+*.iml
+.classpath
+.project
+.settings/
+.DS_Store
+Thumbs.db

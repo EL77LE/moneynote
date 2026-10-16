@@ -1,0 +1,44 @@
+name: money_note
+description: "MoneyNote —— 用 AI 协作完成的 Android / iOS 双端原生记账 App"
+publish_to: 'none'
+version: 1.0.0+1
+
+environment:
+  sdk: '>=3.4.0 <4.0.0'
+
+dependencies:
+  flutter:
+    sdk: flutter
+  # 中文本地化：日期选择器等 Material 组件要靠它才是中文
+  flutter_localizations:
+    sdk: flutter
+
+  cupertino_icons: ^1.0.8
+
+  # 网络请求。Dart 官方团队维护，只依赖 dart:io，没有任何原生代码。
+  http: ^1.2.0
+
+  # 本地缓存。Flutter 官方团队维护。
+  shared_preferences: ^2.2.0
+
+dev_dependencies:
+  flutter_test:
+    sdk: flutter
+
+  # 这里写 any 是故意的：它只提供静态检查规则，不影响编译产物。
+  # 写死版本号反而会在 Flutter 升级后造成 "version solving failed"。
+  flutter_lints: any
+
+flutter:
+  uses-material-design: true
+
+  # 中文字体。为什么需要它，见 lib/theme.dart 里那段说明——
+  # 简单说：Web 版的渲染引擎（CanvasKit）不认系统字体，
+  # 中文得靠它自己去 fonts.gstatic.com 下载，而那个域名在国内打不开。
+  #
+  # 用 Noto Sans SC，OFL 开源协议，可自由分发。
+  # 只声明 Regular 一个字重：够用，且每多一个字重就多 8 MB。
+  fonts:
+    - family: NotoSansSC
+      fonts:
+        - asset: assets/fonts/NotoSansSC-Regular.otf

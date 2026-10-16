@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <!--
+    base href 是 Flutter 构建时替换的占位符，别手改。
+    构建时用 --base-href 传值：GitHub Pages 要传 /仓库名/，Netlify 不传。
+    详见 docs/12-部署到网页端.md 第 4.1 节。
+  -->
+  <base href="$FLUTTER_BASE_HREF">
+
+  <meta charset="UTF-8">
+  <meta content="IE=Edge" http-equiv="X-UA-Compatible">
+  <meta name="description" content="MoneyNote —— 用 Flutter 写的一套代码编译出的 Android / iOS 双端原生记账 App。">
+
+  <!-- 手机浏览器地址栏的配色，跟 App 的深色主题对齐 -->
+  <meta name="theme-color" content="#101418">
+
+  <!-- iOS meta tags & icons -->
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="MoneyNote">
+  <link rel="apple-touch-icon" href="icons/Icon-192.png">
+
+  <!-- Favicon -->
+  <link rel="icon" type="image/png" href="favicon.png"/>
+
+  <title>MoneyNote 记账</title>
+  <link rel="manifest" href="manifest.json">
+
+  <!--
+    载入动画。这一段很重要，不是装饰：
+
+    Flutter 网页版首次打开要先下载 main.dart.js（约 2 MB）再下载
+    canvaskit.wasm（约 5 MB），然后才画出第一帧。在慢一点的网络上
+    这是好几秒。**默认情况下这几秒页面是全白的** —— 招聘方点开你的链接，
+    看到的就是一片白，很容易以为是坏的，直接关掉。
+
+    所以这里先铺一个和 App 同色的深色底 + 一行字，让"在加载"这件事可见。
+
+    注意这段是**普通 HTML**，用的是浏览器自己的系统字体，
+    不经过 CanvasKit —— 所以即使中文字体出问题，这行字也是好的。
+  -->
+  <style>
+    html, body {
+      margin: 0;
+      padding: 0;
+      height: 100%;
+      background-color: #101418;
+    }
+    #loading {
+      position: fixed;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 20px;
+      color: #8b949e;
+      font-family: -apple-system, "Segoe UI", "Microsoft YaHei", sans-serif;
+    }
+    #loading .name {
+      color: #12b886;
+      font-size: 26px;
+      font-weight: 600;
+      letter-spacing: 1px;
+    }
+    #loading .tip { font-size: 14px; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    #loading .ring {
+      width: 26px;
+      height: 26px;
+      border: 2px solid #2a3138;
+      border-top-color: #12b886;
+      border-radius: 50%;
+      animation: spin 0.9s linear infinite;
+    }
+    /* 万一脚本没跑起来，字也别一直转 */
+    @media (prefers-reduced-motion: reduce) {
+      #loading .ring { animation: none; }
+    }
+  </style>
+</head>
+<body>
+  <div id="loading">
+    <div class="name">MoneyNote</div>
+    <div class="ring"></div>
+    <div class="tip">正在载入…</div>
+  </div>
+
+  <script>
+    // Flutter 画完第一帧会往 window 上派发这个事件，这时候再把载入层摘掉。
+    // 用事件而不是固定延时：网络快就早摘，网络慢就等它，不会出现
+    // "动画没了但界面还没出来"或者"界面出来了动画还盖在上面"。
+    window.addEventListener('flutter-first-frame', function () {
+      document.getElementById('loading')?.remove();
+    });
+  </script>
+
+  <script src="flutter_bootstrap.js" async></script>
+</body>
+</html>
