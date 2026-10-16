@@ -205,6 +205,55 @@ function human(ms) {
 /** 令牌只显示前 4 位，别把整串打进终端/日志 */
 const mask = (t) => (t.length > 4 ? `${t.slice(0, 4)}…（已隐藏）` : '（已隐藏）');
 
+/**
+ * 失败就重试（异步）。`shouldRetry(e)` 返回 false 时立刻放弃，不浪费时间。
+ *
+ * **为什么非要有这个**（同样是真踩出来的）：
+ * 2026-10-16 实测本机连 `github.com:443`，**连续 6 次 TCP 连接里有 2 次直接
+ * 20 秒超时** —— 大约 1/3 的失败率。而 `api.github.com` 一直很稳
+ * （0.4 秒连上），因为它俩解析到的是**不同的 IP**。
+ *
+ * 于是现象特别气人：脚本前面几步全都正常，就在推代码那一下
+ *   Failed to connect to github.com port 443 after 21277 ms: Timed out
+ * 一次性 push 撞上那 1/3 就整个失败。用户看到"连接超时"根本无从下手 ——
+ * 网络明明是通的，他自己打开浏览器就能上 github.com。
+ *
+ * **重试在这里是安全的**，因为只对"传输层错误"重试：
+ *   - `git push` 本身幂等，推成功了再推一次什么都不做；
+ *   - `api()` 只在网络层异常时重试，那种情况下请求根本没送到 GitHub，
+ *     不存在"重复创建仓库"之类的副作用。
+ * 而 `non-fast-forward`、`401` 这类**业务错误**由 shouldRetry 挡掉，立刻失败 ——
+ * 那些重试一百次也是同样的结果。
+ *
+ * 退避 2s / 4s / 8s：三次重试最多多等 14 秒，
+ * 比让用户自己重跑一遍整个流程便宜太多了。
+ */
+async function retry(label, attempts, fn, { shouldRetry = () => true, noisy = true } = {}) {
+  let lastErr;
+  for (let i = 1; i <= attempts; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      lastErr = e;
+      if (i === attempts || !shouldRetry(e)) break;
+      const wait = 2000 * 2 ** (i - 1);
+      if (noisy) {
+        warn(`${label}没成功（第 ${i}/${attempts} 次）：${String(e.message).split('\n')[0]}`);
+        info(`网络有点抖，等 ${wait / 1000} 秒自动重试 —— 不用你做任何事。`);
+      }
+      await new Promise((r) => setTimeout(r, wait));
+    }
+  }
+  throw lastErr;
+}
+
+/** 判断一个 git/网络的报错是不是"传输层抽风"，值得重试。 */
+function isTransportError(text) {
+  return /timed out|Failed to connect|Could not resolve|Could not read from remote|Connection reset|Connection refused|Recv failure|Send failure|early EOF|RPC failed|TLS|ECONNRESET|ETIMEDOUT|ENETUNREACH|socket hang up/i.test(
+    text ?? '',
+  );
+}
+
 /* ======================= 第 1 步：自检 ======================= */
 
 function checkEnvironment() {
@@ -495,17 +544,28 @@ function askForTokenSync() {
 async function api(path, { method = 'GET', body, allow404 = false, token } = {}) {
   let res;
   try {
-    res = await fetch(`https://api.github.com${path}`, {
-      method,
-      headers: {
-        Authorization: `Bearer ${token}`,
-        Accept: 'application/vnd.github+json',
-        'X-GitHub-Api-Version': '2022-11-28',
-        'User-Agent': UA,
-        ...(body ? { 'Content-Type': 'application/json' } : {}),
+    res = await retry(
+      `${method} ${path}`,
+      3,
+      () =>
+        fetch(`https://api.github.com${path}`, {
+          method,
+          headers: {
+            Authorization: `Bearer ${token}`,
+            Accept: 'application/vnd.github+json',
+            'X-GitHub-Api-Version': '2022-11-28',
+            'User-Agent': UA,
+            ...(body ? { 'Content-Type': 'application/json' } : {}),
+          },
+          body: body ? JSON.stringify(body) : undefined,
+        }),
+      {
+        // 请求头里有非法字符属于**输入错误**（比如令牌粘错了），
+        // 重试一百次也是同样的结果 —— 必须立刻报出来，别浪费用户 14 秒。
+        // 其余（DNS、超时、连接被重置）都是网络抽风，值得重试。
+        shouldRetry: (e) => !/ByteString|invalid header|header value/i.test(e.message ?? ''),
       },
-      body: body ? JSON.stringify(body) : undefined,
-    });
+    );
   } catch (e) {
     // ⚠️ 这一个 catch 里混着**两种毫无关系**的失败，别一锅端地都说成"检查一下网络"。
     //
@@ -601,7 +661,7 @@ async function ensureRepo(token) {
 
 /* ===================== 第 3 步：推代码 ===================== */
 
-function pushCode(token) {
+async function pushCode(token) {
   step(3, 6, '把代码推上去');
 
   // 确保在 main 分支上（git init -b main 已经是了，这里是兜底）
@@ -637,13 +697,16 @@ function pushCode(token) {
   const pushUrl = `https://x-access-token:${token}@github.com/${OWNER}/${REPO}.git`;
   info('正在推送...');
 
-  const r = git(['push', pushUrl, `${BRANCH}:${BRANCH}`]);
+  // 把"推一次，失败就 throw"包成一个函数交给 retry，
+  // 重试的编排就不用掺进这段主流程里。
+  const pushOnce = () => {
+    const res = git(['push', pushUrl, `${BRANCH}:${BRANCH}`]);
+    if (res.ok) return res;
 
-  if (!r.ok) {
     const err = new Error('git push 失败');
     // git 会把带令牌的地址原样打进报错里 —— 必须抹掉再给用户看，
     // 否则用户复制报错去问 AI 的时候就把令牌一起发出去了。
-    err.detail = (r.stderr || r.stdout || '').split(token).join('***已隐藏***');
+    err.detail = (res.stderr || res.stdout || '').split(token).join('***已隐藏***');
 
     if (/non-fast-forward|rejected/i.test(err.detail)) {
       err.detail +=
@@ -659,7 +722,13 @@ function pushCode(token) {
         '\n改完删掉 secrets\\token.txt 重新跑。';
     }
     throw err;
-  }
+  };
+
+  const r = await retry('推送', 4, async () => pushOnce(), {
+    // 只对"连接/传输抽风"重试。non-fast-forward、401 这类是业务错误，
+    // 重试一百次也是同样的结果，立刻失败反而更有用。
+    shouldRetry: (e) => isTransportError(e.detail ?? e.message),
+  });
 
   ok('推送完成');
   if (r.stdout) info(r.stdout.split('\n')[0]);
@@ -1081,7 +1150,7 @@ async function main() {
 
   try {
     await ensureRepo(token);
-    pushCode(token);
+    await pushCode(token);
 
     step(4, 6, '触发云端的 iOS 构建 + 录屏');
     info('用的是 GitHub 的免费 macOS 机器，不需要你有 Mac');
