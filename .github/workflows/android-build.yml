@@ -1,0 +1,257 @@
+# 安卓构建 + 模拟器录屏 +（可选）能装进你手机的 APK
+#
+# 用途三个，按重要性排：
+#   1. 证明安卓端真的能编译、能装、能跑 —— 补上 iOS 那份录屏之外的另一半「双端」
+#   2. 在云端模拟器上录一段安卓操作视频（不需要你有安卓手机，也不需要插线）
+#   3. 可选：编一个**能直接装进你自己手机**的 APK
+#
+# 怎么用：
+#   1. 推到 GitHub（公开仓库，Actions 分钟数免费且不限量）
+#   2. 仓库页 -> Actions -> 左边选「安卓构建与录屏」-> Run workflow
+#   3. 等 10~20 分钟，在运行页面底部 Artifacts 里下载
+#
+# 两个输入框：
+#   record_seconds  录屏时长，默认 30 秒
+#   api_base_url    后端地址。**留空也能跑**，见下面的「两种模式」
+#
+# ────────────────────── 两种模式，区别只在 api_base_url 填不填 ──────────────────────
+#
+#   留空 → 「模拟器模式」
+#     用 Android 给模拟器保留的固定地址 http://10.0.2.2:3000。
+#     10.0.2.2 在模拟器里指向**它的宿主机**，而这个工作流正好在宿主机上启动了
+#     后端，所以开箱即用，一行代码都不用改。
+#     （iOS 那边是同一个道理，模拟器和宿主 macOS 共享网络栈，见 ios-build.yml。）
+#
+#     ⚠️ 这样编出来的 APK **装到真机上连不上** —— 真机里的 10.0.2.2 什么都不指向。
+#        所以这个模式下，产物里只有录屏有用，APK 是个副产品。
+#
+#   填了（例如 https://moneynote-api.onrender.com）→ 「真机模式」
+#     这个地址会被编译**进** APK（--dart-define）。模拟器照样连得上（它就是个
+#     公网地址），录屏照录；同时编出来的 APK 你可以下载、发到手机上、点一下安装，
+#     打开就是连着真后端。
+#     前提：后端得先部署到公网，见 docs/06-部署后端到公网.md。
+#
+# ────────────────────── 为什么这段录屏不用你装 Android SDK ──────────────────────
+#
+# 因为整件事跑在 GitHub 的一台 Ubuntu 机器上：安卓模拟器、SDK、adb 全在那边，
+# 你本机一个字节都不用装。
+# 这正好绕开一个大坑 —— 在 Windows 上装 Android SDK 要下 5~8 GB，
+# 还要装 USB 驱动、插数据线。这条工作流把这一整套都省掉了。
+
+name: 安卓构建与录屏
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_seconds:
+        description: '录屏时长（秒，上限 180）'
+        required: false
+        default: '30'
+      api_base_url:
+        description: '后端地址。留空=只在云端模拟器里演示；填公网 https 地址=额外得到一个能装进你手机的 APK'
+        required: false
+        default: ''
+
+jobs:
+  build-and-record:
+    # ⚠️ 为什么钉死 24.04，不用 `ubuntu-latest`：
+    # 和 ios-build.yml 里钉 macos-15、web-deploy.yml 里钉 Flutter 版本是同一个理由 ——
+    # `latest` 会随时间漂移。今天跑通的机器，半年后 GitHub 把 latest 挪到下一版，
+    # 就可能在你不改任何代码的情况下挂掉，而且报错通常和工作内容毫无关系。
+    # 钉死版本是为了让「我验证过的东西」和「CI 上跑的东西」是同一个。
+    #
+    # 为什么选 ubuntu 而不是 macos：安卓构建**不需要** macOS。
+    # Linux 机器更快、排队更短，而且 24.04 目前远没有弃用风险
+    # （对比 macos-14 那种有明确截止日期的坑，见 ios-build.yml 的注释）。
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          # 和另两个工作流保持一致，钉死版本。理由见 web-deploy.yml 的注释：
+          # 写 stable 意味着 CI 装的版本会随时间漂移，而本机验证过的是 3.47.7。
+          flutter-version: '3.47.7'
+          channel: stable
+          cache: true
+
+      - name: Flutter 版本
+        run: flutter --version
+
+      - name: 安装后端依赖并生成演示数据
+        working-directory: backend
+        run: |
+          npm install
+          npm run seed
+
+      - name: 后台启动后端
+        working-directory: backend
+        run: |
+          nohup npm start > /tmp/backend.log 2>&1 &
+          # 轮询等它就绪，比 sleep 一个固定秒数可靠
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "后端已就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "后端 30 秒内没起来，日志如下："
+          cat /tmp/backend.log
+          exit 1
+
+      - name: 验证后端能返回中文数据
+        run: |
+          curl -fsS "http://localhost:3000/api/stats?month=$(date +%Y-%m)" | head -c 400
+          echo
+
+      - name: 安装 App 依赖
+        working-directory: app
+        run: flutter pub get
+
+      - name: 静态检查
+        working-directory: app
+        run: flutter analyze
+
+      - name: 跑单元测试
+        working-directory: app
+        run: flutter test
+
+      - name: 决定这次把哪个后端地址编进去
+        run: |
+          INPUT="${{ github.event.inputs.api_base_url }}"
+          if [ -z "$INPUT" ]; then
+            API="http://10.0.2.2:3000"
+            echo "MODE=模拟器模式（APK 装到真机上连不上，产物里只有录屏有用）" >> "$GITHUB_ENV"
+          else
+            API="$INPUT"
+            echo "MODE=真机模式（APK 可以直接装进手机）" >> "$GITHUB_ENV"
+          fi
+          # 写进 GITHUB_ENV，后面几步用 $API_BASE_URL 取，不用重复一遍这段判断
+          echo "API_BASE_URL=$API" >> "$GITHUB_ENV"
+          echo "本次模式：$MODE"
+          echo "编进去的后端地址：$API"
+
+      - name: 从 Gradle 配置里读包名
+        run: |
+          # 不硬编码包名。改过 applicationId 的话硬编码就会悄悄失效，
+          # 而失败表现是"App 启动不起来"，很难往包名上想。
+          APP_ID=$(sed -n 's/.*applicationId = "\(.*\)".*/\1/p' app/android/app/build.gradle.kts)
+          if [ -z "$APP_ID" ]; then
+            echo "没能从 app/android/app/build.gradle.kts 里读出 applicationId"
+            exit 1
+          fi
+          echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
+          echo "包名：$APP_ID"
+
+      - name: 构建 APK
+        working-directory: app
+        run: |
+          # --release 而不是 --debug：真机上要装的是 release 包。
+          # 签名用的是 debug 密钥（见 app/android/app/build.gradle.kts 里的
+          # signingConfig），所以**不需要你配密钥库**也能编出可安装的包。
+          # 正式上架 Google Play 才需要换成自己的签名。
+          flutter build apk --release --dart-define=API_BASE_URL="$API_BASE_URL"
+          ls -la build/app/outputs/flutter-apk/
+
+      - name: 在云端模拟器里安装、运行、录屏
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          # 强制软件渲染。CI 的机器没有 GPU，用硬件渲染会起不来或者黑屏。
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
+          # 关掉系统动画会让界面显得很"死"。这段视频是要发给人看的，
+          # 所以保持动画开启。（这个选项默认是 true，那是给自动化 UI 测试用的场景 ——
+          # 关掉动画能让点击更稳定。我们这里不做 UI 测试，不需要那个稳定性。）
+          disable-animations: false
+          script: |
+            set -e
+
+            DURATION="${{ github.event.inputs.record_seconds }}"
+            # screenrecord 的 --time-limit 上限就是 180 秒。填大了不会报错，
+            # 而是**静默截断** —— 你会拿到一段比预期短的视频，还以为是脚本的问题。
+            if [ "$DURATION" -gt 180 ]; then
+              echo "录屏上限是 180 秒，$DURATION 改成 180"
+              DURATION=180
+            fi
+
+            # 确认模拟器真的连上了，否则后面每一步都会以奇怪的方式失败
+            adb wait-for-device
+            echo "模拟器已连接：$(adb shell getprop ro.build.version.release)"
+
+            APK="build/app/outputs/flutter-apk/app-release.apk"
+            echo "安装 $APK"
+            adb install -r "$APK"
+
+            # 先开录，再启动 App —— 这样视频里有启动那一下，更像真的在用
+            adb shell screenrecord --time-limit "$DURATION" --bit-rate 4000000 \
+              --size 720x1280 /sdcard/android-demo.mp4 &
+            REC_PID=$!
+            sleep 5
+
+            # 用 monkey 启动，而不是写死 `am start -n 包名/.MainActivity`：
+            # monkey 只需要包名，不用知道 Activity 叫什么。
+            # 以后哪怕把 MainActivity 改了名或挪了位置，这一步也不会坏。
+            adb shell monkey -p "$APP_ID" -c android.intent.category.LAUNCHER 1
+
+            # 等它把后端数据拉回来、渲染完，同时让录屏录满
+            sleep "$DURATION"
+
+            # 等 screenrecord 自己因为 --time-limit 到点而正常退出。
+            # 不 wait 的话，后面 adb pull 可能拿到一个还没写完索引的 mp4 —— 播不了。
+            wait "$REC_PID" || true
+
+            adb exec-out screencap -p > /tmp/android-screenshot.png
+            adb pull /sdcard/android-demo.mp4 /tmp/android-demo.mp4
+            ls -la /tmp/android-demo.mp4 /tmp/android-screenshot.png
+
+      - name: 后端日志
+        if: always()
+        run: cat /tmp/backend.log
+
+      - name: 上传录屏和截图
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-emulator-recording
+          path: |
+            /tmp/android-demo.mp4
+            /tmp/android-screenshot.png
+          retention-days: 30
+
+      - name: 上传 APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-apk
+          path: app/build/app/outputs/flutter-apk/app-release.apk
+          retention-days: 30
+
+      - name: 写一份人话总结
+        if: always()
+        run: |
+          {
+            echo "## 这次跑完了，你拿到了什么"
+            echo ""
+            echo "| 产物 | 说明 |"
+            echo "|---|---|"
+            echo "| \`android-emulator-recording\` | 云端安卓模拟器上的录屏 + 一张截图。**下载后在运行页面最下面** |"
+            echo "| \`android-apk\` | 编译出来的安装包 |"
+            echo ""
+            echo "**本次模式**：$MODE"
+            echo ""
+            echo "编进去的后端地址：\`$API_BASE_URL\`"
+            echo ""
+            if [ -z "${{ github.event.inputs.api_base_url }}" ]; then
+              echo "> ⚠️ 这个 APK 是「模拟器模式」的，装到你手机上打开会显示连不上 ——"
+              echo "> 因为 10.0.2.2 只在模拟器里有效。"
+              echo "> 想要能装进手机的 APK，把后端按 docs/06-部署后端到公网.md 部署好，"
+              echo "> 再跑一次这个工作流，在 api_base_url 里填上公网地址。"
+            else
+              echo "> ✅ 这个 APK 可以直接装进手机：把它下载到手机上（微信传给自己 / 网盘 / 数据线都行），"
+              echo "> 点一下安装。系统会提示「未知来源」，允许即可。"
+            fi
+          } >> "$GITHUB_STEP_SUMMARY"
