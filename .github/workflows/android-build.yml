@@ -164,7 +164,7 @@ jobs:
           #
           # 1) 正常版：如果你填了 api_base_url，它就真的连公网后端，可以装手机。
           flutter build apk --release --dart-define=API_BASE_URL="$API_BASE_URL"
-          cp build/app/outputs/flutter-apk/app-release.apk build/moneynote-release.apk
+          cp build/app/outputs/flutter-apk/app-release.apk ../moneynote-release.apk
 
           # 2) 录屏演示版：固定连本机模拟器后端，打开 DEMO_MODE。
           #    App 启动后会自己走一遍「首页 → 记一笔 → 保存 → 统计 → 切月份」，
@@ -173,9 +173,9 @@ jobs:
           flutter build apk --release \
             --dart-define=API_BASE_URL=http://10.0.2.2:3000 \
             --dart-define=DEMO_MODE=true
-          cp build/app/outputs/flutter-apk/app-release.apk build/moneynote-demo.apk
+          cp build/app/outputs/flutter-apk/app-release.apk ../moneynote-demo.apk
 
-          ls -la build/moneynote-release.apk build/moneynote-demo.apk
+          ls -la ../moneynote-release.apk ../moneynote-demo.apk
 
       - name: 在云端模拟器里安装、运行、录屏
         uses: reactivecircus/android-emulator-runner@v2
@@ -216,10 +216,10 @@ jobs:
             adb wait-for-device
             echo "模拟器已连接：$(adb shell getprop ro.build.version.release)"
 
-            # 装的是上一步复制出来的「录屏演示版」。
+            # 装的是上一步复制到仓库根目录的「录屏演示版」。
             # 它已经带 DEMO_MODE=true，启动后会自动演示功能。
-            # 正常版留在 app/build/moneynote-release.apk，最后作为 artifact 上传。
-            APK="app/build/moneynote-demo.apk"
+            # 正常版留在 moneynote-release.apk，最后作为 artifact 上传。
+            APK="moneynote-demo.apk"
             echo "安装录屏演示版 $APK"
             adb install -r "$APK"
 
@@ -273,7 +273,7 @@ jobs:
         with:
           name: android-apk
           # 上传的是正常版，不是自动演示版；下载后可以正常装手机。
-          path: app/build/moneynote-release.apk
+          path: moneynote-release.apk
           retention-days: 30
           if-no-files-found: warn
 
