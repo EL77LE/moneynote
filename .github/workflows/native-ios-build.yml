@@ -1,0 +1,133 @@
+name: iOS 原生构建与录屏
+
+on:
+  workflow_dispatch:
+    inputs:
+      record_seconds:
+        description: '录屏时长（秒）'
+        required: false
+        default: '45'
+
+jobs:
+  build-and-record:
+    runs-on: macos-15
+    timeout-minutes: 50
+
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+
+      - name: 启动本机后端
+        working-directory: backend
+        run: |
+          npm install
+          npm run seed
+          nohup npm start > /tmp/backend.log 2>&1 &
+          for i in $(seq 1 30); do
+            if curl -fsS http://localhost:3000/api/health > /dev/null; then
+              echo "后端已就绪"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "后端 30 秒没起来，日志如下："
+          cat /tmp/backend.log
+          exit 1
+
+      - name: 安装 XcodeGen
+        run: brew install xcodegen
+
+      - name: 生成 Xcode 工程
+        working-directory: native/ios
+        run: xcodegen generate
+
+      - name: 编译 iOS 模拟器 App
+        working-directory: native/ios
+        run: |
+          xcodebuild \
+            -project MoneyNote.xcodeproj \
+            -scheme MoneyNote \
+            -destination 'generic/platform=iOS Simulator' \
+            -configuration Debug \
+            -derivedDataPath build \
+            CODE_SIGNING_ALLOWED=NO \
+            build
+
+      - name: 启动 iOS 模拟器
+        id: sim
+        run: |
+          UDID=$(xcrun simctl list devices available -j \
+            | python3 -c "import json,sys; d=json.load(sys.stdin)['devices']; \
+              c=[x['udid'] for k,v in d.items() if 'iOS' in k for x in v if x['name'].startswith('iPhone')]; \
+              print(c[0] if c else '')")
+          if [ -z "$UDID" ]; then
+            echo "没有可用的 iPhone 模拟器"
+            xcrun simctl list devices available
+            exit 1
+          fi
+          echo "模拟器 UDID: $UDID"
+          echo "udid=$UDID" >> "$GITHUB_OUTPUT"
+          xcrun simctl boot "$UDID" || true
+          xcrun simctl bootstatus "$UDID" -b
+
+      - name: 安装并录屏
+        env:
+          RECORD_SECONDS: ${{ github.event.inputs.record_seconds }}
+          UDID: ${{ steps.sim.outputs.udid }}
+        run: |
+          set -e
+          DURATION="${RECORD_SECONDS:-45}"
+          if ! echo "$DURATION" | grep -Eq '^[0-9]+$' || [ "$DURATION" -lt 10 ] || [ "$DURATION" -gt 180 ]; then
+            echo "录屏时长不合法，改用 45 秒"
+            DURATION=45
+          fi
+
+          APP="native/ios/build/Build/Products/Debug-iphonesimulator/MoneyNote.app"
+          test -d "$APP"
+          xcrun simctl install "$UDID" "$APP"
+
+          # 先开录屏，再启动 App，保证片头不是黑屏。
+          xcrun simctl io "$UDID" recordVideo --codec=h264 /tmp/native-ios.mp4 &
+          REC_PID=$!
+          sleep 3
+
+          # --demo：自动走完首页 → 记一笔 → 保存 → 统计 → 切月份
+          # SIMCTL_CHILD_API_BASE_URL：把 App 的后端指到本机。
+          SIMCTL_CHILD_API_BASE_URL="http://localhost:3000" \
+            xcrun simctl launch "$UDID" com.moneynote.native --demo
+
+          sleep "$DURATION"
+          kill -INT "$REC_PID" || true
+          wait "$REC_PID" || true
+
+          sleep 2
+          xcrun simctl io "$UDID" screenshot /tmp/native-ios.png
+          cp /tmp/native-ios.mp4 native-ios.mp4
+          cp /tmp/native-ios.png native-ios.png
+          test -s native-ios.mp4
+          ls -lh native-ios.mp4 native-ios.png
+
+      - name: 后端日志
+        if: always()
+        run: |
+          if [ -f /tmp/backend.log ]; then
+            tail -n 80 /tmp/backend.log
+          else
+            echo "没有后端日志"
+          fi
+
+      - name: 上传录屏和截图
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ios-recording
+          path: |
+            native-ios.mp4
+            native-ios.png
+          retention-days: 30
+          if-no-files-found: warn

@@ -4,11 +4,11 @@ REM  MoneyNote one-click delivery.  Double-click this file.
 REM
 REM  It does, in order, with no questions asked:
 REM    1. check environment, get a GitHub token (asks once, ever)
-REM    2. create the public repo github.com/EL77LE/moneynote
+REM    2. create the public repo github.com/<your-name>/moneynote
 REM    3. push the code
-REM    4. trigger the iOS build + simulator recording on GitHub's
-REM       free macOS machine
-REM    5. wait for it, download the recording into dist\
+REM    4. trigger the iOS + Android NATIVE builds and simulator
+REM       recordings on GitHub's free macOS / Ubuntu machines
+REM    5. wait for them, download both recordings into dist\
 REM    6. print what you got and what to do next
 REM
 REM  NOTE: this file is deliberately pure ASCII -- NOT ONE character

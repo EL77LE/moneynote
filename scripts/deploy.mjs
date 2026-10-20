@@ -22,11 +22,10 @@
  *   - iOS：macOS 机器 + Xcode 模拟器 + `simctl recordVideo`
  *   - 安卓：Ubuntu 机器 + Android SDK/模拟器 + `adb shell screenrecord`
  * 每个工作流自己启动后端、编译 App、启动模拟器、录屏、上传，
- * 全程无人值守。招聘要的「双端」，证据就是这两段视频加工两个原生工程目录。
- *
- * 注意：Flutter 是跨平台框架，不是 Kotlin 和 Swift 各写一套。
- * 仓库里的 app/android/ 和 app/ios/ 是 Flutter 生成并维护的原生工程壳，
- * 邮件里要如实写「Flutter 实现 Android + iOS 双端」，别写成「双端原生」。
+ * 全程无人值守。招聘要的「双端」，证据就是这两段视频，加上两个真正的原生工程：
+ *   - native/android：Kotlin + Jetpack Compose
+ *   - native/ios：SwiftUI
+ * 这是两套独立代码，不是 Flutter 套壳。
  *
  * 真机录屏仍然做不到自动化 —— 那需要插数据线、在手机上点。
  * 这一段留在 docs/05-录屏与打包.md 里作为可选手动步骤。
@@ -95,22 +94,25 @@ const BRANCH = 'main';
 const WORKFLOWS = [
   {
     key: 'ios',
-    file: 'ios-build.yml',
-    label: 'iOS 模拟器',
-    artifact: 'ios-simulator-recording',
+    file: 'native-ios-build.yml',
+    label: 'iOS 原生（SwiftUI）',
+    artifact: 'native-ios-recording',
     outBase: 'demo-ios',
     inputs: { record_seconds: '45' },
   },
   {
     key: 'android',
-    file: 'android-build.yml',
-    label: '安卓模拟器',
-    artifact: 'android-emulator-recording',
+    file: 'native-android-build.yml',
+    label: 'Android 原生（Kotlin）',
+    artifact: 'native-android-recording',
     outBase: 'demo-android',
+    extraArtifacts: [
+      { name: 'native-android-apk', out: 'moneynote-native.apk', ext: '.apk' },
+    ],
     inputs: {
       record_seconds: '45',
       // 配了公网后端就顺手编一个能装真机的 APK；没配就留空，走模拟器模式。
-      // 末尾斜杠会拼出 //api/...，这里顺手去掉（和前端 ApiClient 的行为一致）。
+      // 末尾斜杠会拼出 //api/...，这里顺手去掉（和原生 ApiClient 的行为一致）。
       api_base_url: (process.env.API_BASE_URL ?? '').trim().replace(/\/+$/, ''),
     },
   },
@@ -698,7 +700,7 @@ async function ensureRepo(token) {
     method: 'POST',
     body: {
       name: REPO,
-      description: 'Flutter 跨平台记账 App（Android + iOS）+ Node.js 后端',
+      description: 'Android 原生（Kotlin + Compose）+ iOS 原生（SwiftUI）记账 App + Node.js 后端',
       private: false,
       // auto_init: false 是关键 —— 让它别自动生成 README。
       // 一旦远端有了提交，我们本地的 push 就会被拒（non-fast-forward），
@@ -1026,7 +1028,7 @@ async function fetchRecording(token, job) {
   const mp4 = findFile(extractDir, '.mp4');
   const png = findFile(extractDir, '.png');
 
-  const out = { label: wf.label, mp4: null, png: null };
+  const out = { label: wf.label, mp4: null, png: null, extras: [] };
 
   if (mp4) {
     // 换个好认的名字，方便你直接拖进邮件
@@ -1045,8 +1047,40 @@ async function fetchRecording(token, job) {
     ok(`截图：${out.png}`);
   }
 
-  // zip 留着占地方，删掉（内容已经解出来了）
+  // 录屏 zip 留着占地方，删掉（内容已经解出来了）
   rmSync(zipPath, { force: true });
+
+  // 附加产物：Android 的正常版 APK 单独在一个 artifact 里。
+  // 失败不影响录屏交付，所以只提示、不中断。
+  for (const extra of wf.extraArtifacts ?? []) {
+    const found = artifacts.find((a) => a.name === extra.name);
+    if (!found) {
+      warn(`没找到 ${extra.name}，APK 请去 Actions 页面手动下载。`);
+      continue;
+    }
+
+    const extraZip = join(DIST_DIR, `${extra.name}.zip`);
+    const extraDir = join(DIST_DIR, `${wf.key}-${extra.name}`);
+    try {
+      info(`正在下载 ${extra.name}（${(found.size_in_bytes / 1024 / 1024).toFixed(1)} MB）...`);
+      await downloadArtifact(found.archive_download_url, token, extraZip);
+      unzip(extraZip, extraDir);
+      const file = findFile(extraDir, extra.ext);
+      if (!file) {
+        warn(`${extra.name} 里没有 ${extra.ext} 文件。`);
+      } else {
+        const targetPath = join(DIST_DIR, extra.out);
+        rmSync(targetPath, { force: true });
+        renameSync(file, targetPath);
+        out.extras.push(targetPath);
+        ok(`APK：${targetPath}`);
+      }
+    } catch (e) {
+      warn(`APK 下载/解压失败：${e.message}`);
+    } finally {
+      rmSync(extraZip, { force: true });
+    }
+  }
 
   return out;
 }
@@ -1085,19 +1119,33 @@ function summary(recordings) {
   console.log('  │  都是在 GitHub 云端模拟器上真实跑出来的，本机不用装模拟器。');
   console.log('  └─────────────────────────────────────────────────────────');
   console.log('');
-  console.log('  仓库里还有两个原生工程目录，是「Android + iOS 双端」的代码证据：');
-  console.log(`     ${repoUrl}/tree/main/app/android   ← 安卓工程`);
-  console.log(`     ${repoUrl}/tree/main/app/ios       ← iOS 工程`);
+
+  const apks = recordings.flatMap((r) => r.extras ?? []);
+  if (apks.length > 0) {
+    console.log('  ┌─ ③ Android 安装包 ──────────────────────────────────────');
+    for (const apk of apks) {
+      console.log(`  │  ${apk}`);
+    }
+    if (!process.env.API_BASE_URL) {
+      console.log('  │  ⚠️ 这次没设 API_BASE_URL：APK 连的是模拟器地址 10.0.2.2，真机不能用。');
+      console.log('  │     先部署 Render，再 set API_BASE_URL=... 重跑一次（见 docs/15）。');
+    } else {
+      console.log('  │  已按 API_BASE_URL 编译，装到安卓手机可直接连公网。');
+    }
+    console.log('  └─────────────────────────────────────────────────────────');
+    console.log('');
+  }
+  console.log('  仓库里还有两个原生工程目录，是「Android + iOS 双端原生」的代码证据：');
+  console.log(`     ${repoUrl}/tree/main/native/android   ← Kotlin + Jetpack Compose`);
+  console.log(`     ${repoUrl}/tree/main/native/ios       ← SwiftUI`);
   console.log('');
-  console.log('  ⚠️ 说清楚：这是 Flutter 一套代码编到两端，不是 Kotlin 和 Swift 各写一套。');
-  console.log('     邮件里写「Flutter 实现 Android + iOS 双端」是准确的；');
-  console.log('     写「双端原生」会被懂行的人追问。');
+  console.log('  ✅ 这是两套独立原生代码，不是 Flutter 套壳。邮件里可以写「双端原生」。');
   console.log('');
   console.log(THIN);
   console.log('  接下来还剩三件事（都不影响你现在就把邮件发出去）：');
   console.log('');
   console.log('   1. 部署后端到云端 —— 让「电脑关机了 App 还能用」，也让 APK 发给别人能直接用');
-  console.log('      看 docs/06-部署后端到公网.md。约 30 分钟，免费。');
+  console.log('      看 docs/15-双端原生一键交付.md 第 2、3 节。约 15 分钟，免费。');
   console.log('');
   console.log('   2. 网页版 —— 面试官点开就能玩，不用装任何东西。转化率最高的一项');
   console.log('      看 docs/12-部署到网页端.md。');
@@ -1291,9 +1339,10 @@ async function main() {
           .map((j) => `${j.wf.label}：${j.run.html_url}`)
           .join('\n') +
         '\n\n打开链接，往下滚，找到第一个打红叉的那一步，把它的日志整段复制给 AI。\n' +
-        'iOS 最常见的原因是 Xcode 版本和 Flutter 3.47.7 对不上 —— ' +
-        '如果是这一类，把 ios-build.yml 里的 macos-15 改成 macos-26 再试一次。\n' +
-        '安卓最常见的原因是模拟器没起来，看“在云端模拟器里安装、运行、录屏”那一步。';
+        'iOS 最常见的原因是 XcodeGen 没装好或 Xcode 版本不匹配 —— ' +
+        '看 native-ios-build.yml 的「生成 Xcode 工程」和「编译 iOS 模拟器 App」两步。\n' +
+        '安卓最常见的原因是 Gradle 依赖下载失败或模拟器没起来，' +
+        '看 native-android-build.yml 的「构建正常 APK」和录屏那一步。';
       throw err;
     }
 

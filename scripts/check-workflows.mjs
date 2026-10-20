@@ -272,7 +272,8 @@ function checkWorkflow(file, text) {
     if (!m) return;
     const uses = m[1].trim().replace(/^['"]|['"]$/g, '');
     if (uses.startsWith('./')) return; // 本地 action
-    if (!/^[\w.-]+\/[\w.-]+@[\w.]+$/.test(uses)) {
+    // owner/repo@ref，也允许子路径：owner/repo/sub/action@ref
+    if (!/^[\w.-]+\/[\w.-]+(?:\/[\w.-]+)*@[\w.]+$/.test(uses)) {
       problems.push(`${idx + 1} 行：\`uses: ${uses}\` 格式不对，应该是 \`owner/repo@版本\`。`);
     }
   });

@@ -38,6 +38,16 @@ app/ios/Flutter/flutter_export_environment.sh
 # 插件自动生成的注册代码
 app/**/GeneratedPluginRegistrant.*
 
+# ---------- 原生双端（native/）----------
+native/android/.gradle/
+native/android/build/
+native/android/app/build/
+native/android/local.properties
+native/ios/build/
+native/ios/DerivedData/
+native/ios/*.xcodeproj/
+native/ios/Info.plist
+
 # ---------- 一键交付（scripts/deploy.mjs）----------
 # secrets/ 里放的是 GitHub 令牌（secrets/token.txt），**绝对不能提交**。
 # 它等价于你 GitHub 账号的写权限：谁拿到谁就能往你仓库里推代码、
