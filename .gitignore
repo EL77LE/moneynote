@@ -51,6 +51,7 @@ native/ios/Info.plist
 # ---------- Cloudflare Workers + D1 ----------
 # 真实 database_id 和演示数据由部署脚本生成，不提交。
 worker/wrangler.generated.toml
+worker/wrangler.bootstrap.toml
 worker/seed.generated.sql
 worker/.wrangler/
 .wrangler/

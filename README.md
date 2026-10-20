@@ -43,9 +43,10 @@ dist\cloudflare-url.txt    线上后端地址（部署 Cloudflare 后生成）
 线上用 **Cloudflare Workers + D1**：没有休眠、没有冷启动 30 秒，免费额度足够这个 demo。
 
 1. 双击 **`一键部署Cloudflare.bat`**。
-2. 第一次会打开浏览器登录 Cloudflare（免费账号即可，点 Allow）。
+2. **没有 Cloudflare 账号也能做**：脚本会自动创建 60 分钟临时预览账号，不需要注册、不需要 token。
 3. 脚本自动创建 D1 数据库、建表、灌演示数据、部署 Worker，并把地址写进 `dist\cloudflare-url.txt`。
-4. 再双击 **`一键交付.bat`**。它会自动读取这个地址，把 Android APK 编译成连公网后端的版本。
+4. 浏览器会弹出领取页；在 60 分钟内登录或注册 Cloudflare，点 **Claim / 领取**。领取后永久保留。
+5. 再双击 **`一键交付.bat`**。它会自动读取这个地址，把 Android APK 编译成连公网后端的版本。
 
 部署完可以打开：
 
@@ -55,6 +56,8 @@ https://moneynote-api.<你的子域>.workers.dev/api/health
 
 看到 `{"ok":true}` 就成功。之后 Android 手机装 `dist\moneynote-native.apk`，**你的电脑关机、手机换网络，仍然能记一笔、看统计**。
 
+> 领取链接也写在 `dist\cloudflare-claim.txt`，不要发到公开群。  
+> 国内网络可能拦截 `workers.dev`；换手机网络/VPN 后再测即可，不影响领取和永久部署。  
 > D1 是持久化数据库，重启不会清空；部署脚本只在空库时灌演示数据。iOS 真机安装仍需要 Apple 签名，本次交付的 iOS 证据是模拟器录屏。
 
 ---

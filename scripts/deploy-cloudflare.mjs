@@ -3,7 +3,8 @@
  * 一键把 Cloudflare Workers + D1 后端部署上线。
  *
  * 做的事：
- *   1. 检查 / 引导登录 Cloudflare（浏览器里点一次授权，免费账号即可）
+ *   1. 优先复用已登录的 Cloudflare 账号；没有登录就自动创建「临时预览账号」
+ *      （不需要注册、不需要 API token，60 分钟内领取即可永久保留）
  *   2. 找到或创建 D1 数据库 moneynote-d1
  *   3. 写入 D1 表结构；空库时灌入和本地后端同一批演示数据
  *   4. wrangler deploy
@@ -12,8 +13,9 @@
  * 之后双击「一键交付.bat」时，脚本会自动读取这个文件，
  * 把 Android APK 编译成连 Cloudflare 的版本。
  *
- * 想用 API Token 而不是浏览器登录：
- *   set CLOUDFLARE_API_TOKEN=...
+ * 想用永久账号 / API Token：
+ *   wrangler login
+ *   或 set CLOUDFLARE_API_TOKEN=...（Workers Scripts:Edit + D1:Edit）
  *   set CLOUDFLARE_ACCOUNT_ID=...   （可选，多账号时建议填）
  *   一键部署Cloudflare.bat
  */
@@ -28,10 +30,12 @@ import { fileURLToPath } from 'node:url';
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 const WORKER_DIR = join(ROOT, 'worker');
 const CONFIG = join(WORKER_DIR, 'wrangler.generated.toml');
+const BOOTSTRAP_CONFIG = join(WORKER_DIR, 'wrangler.bootstrap.toml');
 const DIST_DIR = join(ROOT, 'dist');
 const DB_NAME = 'moneynote-d1';
 const WORKER_NAME = 'moneynote-api';
 const WRANGLER_PKG = 'wrangler@latest';
+const TEMP_ACCOUNT_FILE = 'wrangler-temporary-account.toml';
 
 /**
  * Windows 上直接 spawn('npx.cmd') 会报 EINVAL，必须过 cmd.exe；
@@ -148,13 +152,103 @@ function isAuthed(text) {
   return !/not authenticated|not logged in|you are not authenticated|failed to authenticate/i.test(text);
 }
 
-function ensureLogin() {
+/**
+ * wrangler deploy --temporary 会把临时账号凭据写在这个文件里。
+ * 每次部署都会复用它，直到 60 分钟领取窗口结束。
+ */
+function temporaryAccountPaths() {
+  const paths = [];
+  if (process.env.WRANGLER_TEMPORARY_ACCOUNT_PATH) {
+    paths.push(process.env.WRANGLER_TEMPORARY_ACCOUNT_PATH);
+  }
+  if (process.env.APPDATA) {
+    paths.push(join(process.env.APPDATA, 'xdg.config', '.wrangler', TEMP_ACCOUNT_FILE));
+  }
+  if (process.env.XDG_CONFIG_HOME) {
+    paths.push(join(process.env.XDG_CONFIG_HOME, '.wrangler', TEMP_ACCOUNT_FILE));
+  }
+  paths.push(join(homedir(), '.config', '.wrangler', TEMP_ACCOUNT_FILE));
+  paths.push(join(homedir(), '.wrangler', TEMP_ACCOUNT_FILE));
+  return [...new Set(paths)];
+}
+
+function tomlSection(raw, name) {
+  const start = raw.indexOf(`[${name}]`);
+  if (start === -1) return '';
+  const rest = raw.slice(start + name.length + 2);
+  const next = rest.search(/\n\[/);
+  return next === -1 ? rest : rest.slice(0, next);
+}
+
+function tomlValue(section, key) {
+  const match = section.match(new RegExp(`^\\s*${key}\\s*=\\s*"([^"]*)"`, 'm'));
+  return match ? match[1] : null;
+}
+
+function readTemporaryAccount() {
+  for (const file of temporaryAccountPaths()) {
+    if (!existsSync(file)) continue;
+    let raw;
+    try {
+      raw = readFileSync(file, 'utf8');
+    } catch {
+      continue;
+    }
+    const account = tomlSection(raw, 'account');
+    const claim = tomlSection(raw, 'claim');
+    const id = tomlValue(account, 'id');
+    const apiToken = tomlValue(account, 'apiToken');
+    if (!id || !apiToken) continue;
+    return {
+      file,
+      id,
+      apiToken,
+      expiresAt: tomlValue(account, 'expiresAt'),
+      claimUrl: tomlValue(claim, 'url'),
+      claimExpiresAt: tomlValue(claim, 'expiresAt'),
+    };
+  }
+  return null;
+}
+
+function temporaryAccountUsable(account) {
+  if (!account) return false;
+  if (!account.expiresAt) return true;
+  const expires = Date.parse(account.expiresAt);
+  if (!Number.isFinite(expires)) return true;
+  return expires > Date.now() + 30_000;
+}
+
+function applyTemporaryAccount(account) {
+  process.env.CLOUDFLARE_API_TOKEN = account.apiToken;
+  process.env.CLOUDFLARE_ACCOUNT_ID = account.id;
+}
+
+function createBootstrapConfig() {
+  const config = [
+    `name = "${WORKER_NAME}"`,
+    'main = "src/index.js"',
+    'compatibility_date = "2025-01-01"',
+    'workers_dev = true',
+    '',
+  ].join('\n');
+  writeFileSync(BOOTSTRAP_CONFIG, config, 'utf8');
+}
+
+function extractClaimUrl(text) {
+  const match = stripAnsi(text).match(
+    /https:\/\/dash\.cloudflare\.com\/claim-preview\?claimToken=[A-Za-z0-9_-]+/i,
+  );
+  return match ? match[0] : null;
+}
+
+function ensureAuth() {
   step('检查 Cloudflare 登录状态');
 
   const who = runWrangler(['whoami'], { capture: true, allowFail: true });
   if (who.status === 0 && isAuthed(who.output)) {
-    ok('已登录 Cloudflare');
-    return;
+    ok('已登录 Cloudflare（永久账号）');
+    return { mode: 'permanent' };
   }
 
   if (process.env.CLOUDFLARE_API_TOKEN) {
@@ -163,18 +257,48 @@ function ensureLogin() {
     );
   }
 
-  info('第一次部署需要浏览器授权。接下来会打开 Cloudflare 登录页，点 Allow 即可。');
-  info('没有账号就用邮箱注册一个，免费。');
-  const login = runWrangler(['login'], { allowFail: true });
-  if (login.status !== 0) {
-    throw new Error('Cloudflare 登录失败。可以重跑本脚本，或改用 CLOUDFLARE_API_TOKEN。');
+  const cached = readTemporaryAccount();
+  if (temporaryAccountUsable(cached)) {
+    applyTemporaryAccount(cached);
+    ok('复用刚才创建的临时预览账号（不用再注册）');
+    info(`领取截止：${cached.expiresAt || '约 60 分钟内'}`);
+    return {
+      mode: 'temporary',
+      claimUrl: cached.claimUrl,
+      expiresAt: cached.expiresAt,
+    };
   }
 
-  const again = runWrangler(['whoami'], { capture: true, allowFail: true });
-  if (again.status !== 0 || !isAuthed(again.output)) {
-    throw new Error('登录后仍然没有认证成功，请重跑本脚本再试一次。');
+  info('没有登录，正在自动创建临时预览账号（不需要注册、不需要 token）。');
+  info('Cloudflare 要先做一次 proof-of-work，通常几秒到几十秒。');
+  createBootstrapConfig();
+
+  const result = runWrangler(
+    ['deploy', '--temporary', '--config', BOOTSTRAP_CONFIG],
+    { capture: true, allowFail: true },
+  );
+  if (result.status !== 0) {
+    throw new Error(
+      '临时账号创建失败。请检查网络能否访问 api.cloudflare.com，或先运行 wrangler login 用永久账号。',
+    );
   }
-  ok('登录成功');
+
+  const account = readTemporaryAccount();
+  if (!account) {
+    throw new Error('临时账号已创建，但没有找到 wrangler-temporary-account.toml。请重跑本文件。');
+  }
+  applyTemporaryAccount(account);
+  const claimUrl = extractClaimUrl(result.output) || account.claimUrl;
+  if (!claimUrl) {
+    throw new Error('临时账号已创建，但没有拿到领取链接。请重跑本文件，或改用 wrangler login。');
+  }
+  ok('临时预览账号已创建');
+  info(`领取截止：${account.expiresAt || '约 60 分钟内'}`);
+  return {
+    mode: 'temporary',
+    claimUrl,
+    expiresAt: account.expiresAt,
+  };
 }
 
 /* ------------------------------- D1 数据库 ------------------------------- */
@@ -435,26 +559,31 @@ async function deployWorker() {
 async function waitForHealth(baseUrl) {
   step('检查线上 /api/health');
   let last = '';
-  for (let attempt = 1; attempt <= 10; attempt += 1) {
+  for (let attempt = 1; attempt <= 4; attempt += 1) {
     try {
       const response = await fetch(`${baseUrl}/api/health`, {
-        signal: AbortSignal.timeout(15000),
+        signal: AbortSignal.timeout(10000),
       });
       const text = await response.text();
       last = `HTTP ${response.status} ${text.slice(0, 200)}`;
       if (response.ok && text.includes('"ok":true')) {
         ok(`后端在线：${last}`);
-        return;
+        return true;
       }
     } catch (err) {
       last = err instanceof Error ? err.message : String(err);
     }
-    if (attempt < 10) {
-      info(`第 ${attempt} 次没通，3 秒后重试...`);
-      await new Promise((resolve) => setTimeout(resolve, 3000));
+    if (attempt < 4) {
+      info(`第 ${attempt} 次没通，2 秒后重试...`);
+      await new Promise((resolve) => setTimeout(resolve, 2000));
     }
   }
-  throw new Error(`健康检查失败：${last}`);
+
+  // 国内网络/DNS 可能拦截 workers.dev，但部署本身已经成功。
+  // 不让健康检查把整个流程判死，否则用户会误以为没部署上。
+  info(`健康检查没通：${last}`);
+  info('这不一定是部署失败；换手机网络或等 DNS 生效后再试即可。');
+  return false;
 }
 
 function writeUrlFile(url) {
@@ -463,14 +592,34 @@ function writeUrlFile(url) {
   ok(`已写入 dist/cloudflare-url.txt`);
 }
 
+function writeClaimFile(claimUrl) {
+  mkdirSync(DIST_DIR, { recursive: true });
+  writeFileSync(join(DIST_DIR, 'cloudflare-claim.txt'), `${claimUrl}\n`, 'utf8');
+  ok('已写入 dist/cloudflare-claim.txt（领取链接，不要发到公开群）');
+}
+
+function openUrl(url) {
+  try {
+    if (process.platform === 'win32') {
+      spawnSync('cmd', ['/c', 'start', '', url], { stdio: 'ignore', windowsHide: true });
+    } else if (process.platform === 'darwin') {
+      spawnSync('open', [url], { stdio: 'ignore' });
+    } else {
+      spawnSync('xdg-open', [url], { stdio: 'ignore' });
+    }
+  } catch {
+    // 打不开浏览器也没关系，链接已经打印在终端里。
+  }
+}
+
 /* ------------------------------- 主流程 ------------------------------- */
 
 async function main() {
   title('MoneyNote · Cloudflare Workers + D1 一键上线');
   info('免费、常在线；部署完成后你的电脑关机也不影响 API。');
-  info('第一次运行需要浏览器登录 Cloudflare，之后会复用登录状态。');
+  info('没有 Cloudflare 账号也能先上线：脚本会自动开一个 60 分钟临时账号。');
 
-  ensureLogin();
+  const auth = ensureAuth();
   const database = ensureDatabase();
   writeGeneratedConfig(database.id);
   executeSqlFile(join(WORKER_DIR, 'schema.sql'), '建表 / 更新表结构');
@@ -480,12 +629,31 @@ async function main() {
   writeUrlFile(url);
   await waitForHealth(url);
 
+  if (auth.mode === 'temporary' && auth.claimUrl) {
+    writeClaimFile(auth.claimUrl);
+    title('最后一步：60 分钟内领取临时账号');
+    console.log('  临时地址现在就能访问，但 60 分钟内必须领取，否则 Cloudflare 会删除它。');
+    console.log('  浏览器已经打开领取页；登录或注册 Cloudflare，然后点 Claim / 领取。');
+    console.log('');
+    console.log(`  领取链接：${auth.claimUrl}`);
+    if (auth.expiresAt) {
+      console.log(`  截止时间：${auth.expiresAt}`);
+    }
+    console.log('');
+    openUrl(auth.claimUrl);
+  }
+
   title('完成');
   console.log(`  云端 API：${url}`);
   console.log(`  健康检查：${url}/api/health`);
   console.log('');
-  console.log('  下一步：双击「一键交付.bat」。');
-  console.log('  它会自动读取 dist/cloudflare-url.txt，把 Android APK 编译成连 Cloudflare 的版本。');
+  if (auth.mode === 'temporary') {
+    console.log('  先完成上面的领取，再双击「一键交付.bat」。');
+    console.log('  领取后地址和 D1 数据都会保留，不需要重新部署。');
+  } else {
+    console.log('  下一步：双击「一键交付.bat」。');
+    console.log('  它会自动读取 dist/cloudflare-url.txt，把 Android APK 编译成连 Cloudflare 的版本。');
+  }
   console.log('');
 }
 
@@ -496,9 +664,10 @@ main().catch((err) => {
   console.error(`  ${err instanceof Error ? err.message : String(err)}`);
   console.error('');
   console.error('常见原因：');
-  console.error('  - 浏览器登录没完成：重跑本文件，重新点 Allow');
-  console.error('  - Cloudflare 账号没启用 D1：到 dash.cloudflare.com 左侧 Workers & Pages 看一下');
-  console.error('  - 网络/代理拦截了 api.cloudflare.com：关掉代理或换网络再试');
+  console.error('  - api.cloudflare.com 被网络/代理拦截：关掉代理或换网络再试');
+  console.error('  - 临时账号已过期：直接重跑本文件，会重新开一个');
+  console.error('  - 已登录账号没启用 D1：到 dash.cloudflare.com 左侧 Workers & Pages 看一下');
+  console.error('  - 想用永久账号：先运行 wrangler login，再重跑本文件');
 }).finally(() => {
   process.exitCode = exitCode;
 });
