@@ -20,7 +20,7 @@
  *   一键部署Cloudflare.bat
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { createInterface } from 'node:readline/promises';
@@ -224,6 +224,25 @@ function applyTemporaryAccount(account) {
   process.env.CLOUDFLARE_ACCOUNT_ID = account.id;
 }
 
+function clearTemporaryAccount(account) {
+  delete process.env.CLOUDFLARE_API_TOKEN;
+  delete process.env.CLOUDFLARE_ACCOUNT_ID;
+  if (!account?.file) return;
+  try {
+    renameSync(account.file, `${account.file}.expired-${Date.now()}`);
+  } catch {
+    // 文件可能已经被 wrangler 清掉；不影响下一步重新创建。
+  }
+}
+
+function temporaryCredentialsValid(account) {
+  applyTemporaryAccount(account);
+  const check = runWrangler(['whoami'], { capture: true, allowFail: true, quiet: true });
+  if (check.status === 0 && isAuthed(check.output)) return true;
+  // 只有明确是 token 失效才重建；网络限流/断网时不要把还能用的账号丢掉。
+  return !/invalid access token|authentication error|code:\s*9109|code:\s*10000/i.test(check.output);
+}
+
 function createBootstrapConfig() {
   const config = [
     `name = "${WORKER_NAME}"`,
@@ -259,14 +278,17 @@ function ensureAuth() {
 
   const cached = readTemporaryAccount();
   if (temporaryAccountUsable(cached)) {
-    applyTemporaryAccount(cached);
-    ok('复用刚才创建的临时预览账号（不用再注册）');
-    info(`领取截止：${cached.expiresAt || '约 60 分钟内'}`);
-    return {
-      mode: 'temporary',
-      claimUrl: cached.claimUrl,
-      expiresAt: cached.expiresAt,
-    };
+    if (temporaryCredentialsValid(cached)) {
+      ok('复用刚才创建的临时预览账号（不用再注册）');
+      info(`领取截止：${cached.expiresAt || '约 60 分钟内'}`);
+      return {
+        mode: 'temporary',
+        claimUrl: cached.claimUrl,
+        expiresAt: cached.expiresAt,
+      };
+    }
+    info('临时账号凭证已经失效，自动重新创建一个。');
+    clearTemporaryAccount(cached);
   }
 
   info('没有登录，正在自动创建临时预览账号（不需要注册、不需要 token）。');
