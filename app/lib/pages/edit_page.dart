@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -12,10 +14,26 @@ import '../widgets/app_scope.dart';
 /// 新增 / 编辑一条记录。
 /// 传了 [existing] 就是编辑，没传就是新增。
 class EditPage extends StatefulWidget {
-  const EditPage({super.key, this.existing, this.defaultDate});
+  const EditPage({
+    super.key,
+    this.existing,
+    this.defaultDate,
+    this.demoAmount,
+    this.demoNote,
+    this.autoSave = false,
+  });
 
   final MoneyRecord? existing;
   final String? defaultDate;
+
+  /// 录屏演示用：进页面就把金额和备注填好，不弹键盘，画面更干净。
+  /// 正常用户手动点「记一笔」时这两个都是 null。
+  final double? demoAmount;
+  final String? demoNote;
+
+  /// 录屏演示用：停 3.5 秒后自动点「保存」。
+  /// 默认 false，正常使用必须由用户自己点。
+  final bool autoSave;
 
   @override
   State<EditPage> createState() => _EditPageState();
@@ -45,6 +63,25 @@ class _EditPageState extends State<EditPage> {
     if (existing != null) {
       _amountCtrl.text = _amountToText(existing.amount);
       _noteCtrl.text = existing.note;
+    }
+
+    // 录屏演示：把一条像真人的记录先填好，镜头能看清金额、分类、备注。
+    final demoAmount = widget.demoAmount;
+    if (demoAmount != null) {
+      _amountCtrl.text = _amountToText(demoAmount);
+    }
+    final demoNote = widget.demoNote;
+    if (demoNote != null) {
+      _noteCtrl.text = demoNote;
+    }
+
+    if (widget.autoSave) {
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        Future<void>.delayed(const Duration(milliseconds: 3500), () {
+          if (!mounted || _saving) return;
+          unawaited(_save());
+        });
+      });
     }
   }
 
@@ -125,9 +162,10 @@ class _EditPageState extends State<EditPage> {
       return;
     }
     // 后端是按"分"存的，最小单位 0.01 元。
-    // 0.001 这种会被四舍五入成 0 分，后端直接拒掉。
-    // 与其等一个来回再看服务端报错，不如在这儿就说清楚。
-    if (amount < 0.005) {
+    // 以前这里写 0.005，是因为 0.005 会被四舍五入成 1 分；
+    // 但后端现在明确拒绝 0.01 以下的金额，前端必须用同一条线，
+    // 否则用户输入 0.005 会在提交后才收到 BAD_AMOUNT。
+    if (amount < 0.01) {
       _toast('金额最小是 0.01 元');
       return;
     }
@@ -318,7 +356,9 @@ class _EditPageState extends State<EditPage> {
                     Expanded(
                       child: TextField(
                         controller: _amountCtrl,
-                        autofocus: !_isEditing,
+                        // 录屏演示时不要弹键盘，否则分类、日期、保存按钮
+                        // 会被键盘盖住，45 秒视频里看不到完整表单。
+                        autofocus: !_isEditing && widget.demoAmount == null,
                         keyboardType:
                             const TextInputType.numberWithOptions(decimal: true),
                         inputFormatters: <TextInputFormatter>[

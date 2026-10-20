@@ -5,7 +5,7 @@
     "display": "standalone",
     "background_color": "#101418",
     "theme_color": "#101418",
-    "description": "用 Flutter 写的一套代码编译出的 Android / iOS 双端原生记账 App。",
+    "description": "用 Flutter 写的一套代码编译到 Android / iOS 双端的记账 App。",
     "orientation": "portrait-primary",
     "prefer_related_applications": false,
     "icons": [

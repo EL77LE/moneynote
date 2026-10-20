@@ -20,7 +20,7 @@ on:
       record_seconds:
         description: '录屏时长（秒）'
         required: false
-        default: '30'
+        default: '45'
 
 jobs:
   build-and-record:
@@ -47,6 +47,8 @@ jobs:
     # 就往这个方向查 —— 换 macos-26 或 macos-15 都试试，
     # GitHub 的报错里通常会直接写它用的是哪个 Xcode。
     runs-on: macos-15
+    # 编译 + 模拟器 + 录屏，正常 20~30 分钟。超过 45 分钟基本是卡住了。
+    timeout-minutes: 45
 
     steps:
       - name: 拉取代码
@@ -104,6 +106,28 @@ jobs:
         working-directory: app
         run: flutter test
 
+      - name: 决定录屏时长
+        env:
+          RECORD_SECONDS: ${{ github.event.inputs.record_seconds }}
+        run: |
+          DURATION="$RECORD_SECONDS"
+          # 空值 / 非数字先兜底，否则后面比较会在 set -e 的语境里以
+          # "integer expression expected" 这种看不懂的方式失败。
+          if ! echo "$DURATION" | grep -Eq '^[0-9]+$'; then
+            echo "录屏时长「$DURATION」不是数字，改用默认值 45"
+            DURATION=45
+          fi
+          if [ "$DURATION" -gt 180 ]; then
+            echo "录屏上限按 180 秒处理（再长视频文件会很大，GitHub 也不建议）"
+            DURATION=180
+          fi
+          if [ "$DURATION" -lt 5 ]; then
+            echo "录屏太短看不清，改成 5 秒"
+            DURATION=5
+          fi
+          echo "DURATION=$DURATION" >> "$GITHUB_ENV"
+          echo "录屏时长：$DURATION 秒"
+
       - name: 启动 iOS 模拟器
         id: sim
         run: |
@@ -116,15 +140,16 @@ jobs:
           xcrun simctl boot "$UDID" || true
           xcrun simctl bootstatus "$UDID" -b
 
-      - name: 开始录屏
-        run: |
-          xcrun simctl io "${{ steps.sim.outputs.udid }}" recordVideo --codec h264 /tmp/ios-demo.mp4 &
-          echo $! > /tmp/rec.pid
-          sleep 3
-
       - name: 构建 iOS 模拟器版
         working-directory: app
-        run: flutter build ios --simulator --debug
+        run: |
+          # DEMO_MODE=true：App 启动后自动走一遍
+          # 「首页 → 记一笔 → 保存 → 统计 → 切月份」，
+          # 45 秒录屏里能看到真实功能，而不是只停在首页。
+          # 正常安装包不会带这个 define。
+          flutter build ios --simulator --debug \
+            --dart-define=API_BASE_URL=http://localhost:3000 \
+            --dart-define=DEMO_MODE=true
 
       - name: 安装到模拟器
         working-directory: app
@@ -138,11 +163,25 @@ jobs:
           echo "Bundle ID: $BUNDLE_ID"
           echo "BUNDLE_ID=$BUNDLE_ID" >> "$GITHUB_ENV"
 
+      - name: 启动录屏
+        run: |
+          # ⚠️ 录屏必须在**安装完之后、启动 App 之前**开始。
+          # 原来的顺序是先录屏再编译，结果 20 分钟编译等待全被录进了视频，
+          # 真正有用的画面只剩最后几十秒。
+          #
+          # 必须把输出重定向到文件：GitHub Actions 要等这一步骤的 stdout
+          # 关闭才算结束，而 recordVideo 是个长跑进程。不重定向的话，
+          # 这个步骤会一直挂到录屏结束，后面的步骤根本不会开始。
+          nohup xcrun simctl io "${{ steps.sim.outputs.udid }}" recordVideo --codec h264 /tmp/ios-demo.mp4 \
+            > /tmp/rec.log 2>&1 &
+          echo $! > /tmp/rec.pid
+          sleep 3
+
       - name: 启动 App 并等待渲染
         run: |
           xcrun simctl launch "${{ steps.sim.outputs.udid }}" "$BUNDLE_ID"
           # 等它把后端数据拉回来并渲染完
-          sleep ${{ github.event.inputs.record_seconds }}
+          sleep "$DURATION"
 
       - name: 截图留档
         run: |
@@ -150,17 +189,30 @@ jobs:
           ls -la /tmp/ios-screenshot.png
 
       - name: 停止录屏
+        if: always()
         run: |
-          # 必须发 SIGINT，kill -9 会让 mp4 没有索引文件而无法播放
-          kill -INT "$(cat /tmp/rec.pid)" || true
-          sleep 3
-          ls -la /tmp/ios-demo.mp4
+          # 必须发 SIGINT，kill -9 会让 mp4 没有索引文件而无法播放。
+          # 如果前面构建就失败了，这里根本没开始录 —— 不要因此再报一个错，
+          # 把真正的失败原因盖掉。
+          if [ -f /tmp/rec.pid ]; then
+            kill -INT "$(cat /tmp/rec.pid)" || true
+            sleep 3
+            ls -la /tmp/ios-demo.mp4 || true
+          else
+            echo "没有开始录屏（前面的步骤可能已经失败），跳过。"
+          fi
 
       - name: 后端日志
         if: always()
-        run: cat /tmp/backend.log
+        run: |
+          if [ -f /tmp/backend.log ]; then
+            cat /tmp/backend.log
+          else
+            echo "没有后端日志（后端可能没起来）"
+          fi
 
       - name: 上传录屏和截图
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: ios-simulator-recording
@@ -168,3 +220,5 @@ jobs:
             /tmp/ios-demo.mp4
             /tmp/ios-screenshot.png
           retention-days: 30
+          # 构建失败时没有产物，只警告、不再制造第二个红叉
+          if-no-files-found: warn

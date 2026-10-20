@@ -9,11 +9,18 @@ class RootPage extends StatefulWidget {
   const RootPage({super.key});
 
   @override
-  State<RootPage> createState() => _RootPageState();
+  RootPageState createState() => RootPageState();
 }
 
-class _RootPageState extends State<RootPage> {
+class RootPageState extends State<RootPage> {
   int _index = 0;
+
+  /// 给录屏演示用：不经过手指点击，直接切到「统计」Tab。
+  /// 正常使用不会调用它。
+  void showTab(int index) {
+    if (index == _index || index < 0 || index > 1) return;
+    setState(() => _index = index);
+  }
 
   @override
   Widget build(BuildContext context) {

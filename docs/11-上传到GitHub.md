@@ -71,7 +71,7 @@ git config --global user.email "12345678+zhangsan@users.noreply.github.com"
 
 1. 登录 <https://github.com>，右上角 `+` → **New repository**
 2. **Repository name**：`moneynote`
-3. **Description**：`双端原生记账 App · Flutter + Node.js`（可选，但建议填）
+3. **Description**：`Flutter 跨平台记账 App（Android + iOS）· Node.js 后端`（可选，但建议填）
 4. 选 **Public**
 5. ⚠️ **下面三个勾全部不要勾**：
 

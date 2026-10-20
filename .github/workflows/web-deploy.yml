@@ -27,7 +27,8 @@ concurrency:
 
 jobs:
   build:
-    runs-on: ubuntu-latest
+    # 和另两个工作流一样钉死版本：latest 会随时间漂移，今天能跑不代表半年后能跑。
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -69,15 +70,32 @@ jobs:
       #
       # 所以宁可让它在这一步红掉，并且直接告诉你该去哪儿设。
       - name: 检查 API_BASE_URL 是否已配置
+        env:
+          # 走环境变量而不是把 ${{ }} 直接拼进 shell 脚本：
+          # 值里有引号、空格或 $ 时，拼进去会被 shell 再解析一遍。
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
-          if [ -z "${{ vars.API_BASE_URL }}" ]; then
+          if [ -z "$API_BASE_URL" ]; then
             echo "::error::仓库变量 API_BASE_URL 没有设置（或为空），构建出来的站点会是坏的。"
             echo "去仓库 Settings → Secrets and variables → Actions → Variables 新建一个："
             echo "  Name  = API_BASE_URL"
             echo "  Value = https://你的后端域名        （必须是 https，末尾不要加斜杠）"
             exit 1
           fi
-          echo "API_BASE_URL = ${{ vars.API_BASE_URL }}"
+          case "$API_BASE_URL" in
+            https://*) ;;
+            *)
+              echo "::error::API_BASE_URL 必须以 https:// 开头，当前是「$API_BASE_URL」。"
+              echo "GitHub Pages 走的是 https，浏览器会拦截页面里发出的 http 请求（混合内容）。"
+              exit 1
+              ;;
+          esac
+          if [ "${API_BASE_URL%/}" != "$API_BASE_URL" ]; then
+            echo "::error::API_BASE_URL 末尾多了一个斜杠，拼出来的接口地址会变成 //api/...。"
+            echo "去掉末尾的斜杠：${API_BASE_URL%/}"
+            exit 1
+          fi
+          echo "API_BASE_URL = $API_BASE_URL"
 
       # ⚠️ 两个关键参数，少一个站点就是坏的：
       #
@@ -97,12 +115,14 @@ jobs:
       # 不是 Secret。它不是敏感信息，写成 Variable 更透明、日志里也能看见。
       - name: 构建 Web 版
         working-directory: app
+        env:
+          API_BASE_URL: ${{ vars.API_BASE_URL }}
         run: |
           flutter build web \
             --release \
             --base-href "/${{ github.event.repository.name }}/" \
             --no-web-resources-cdn \
-            --dart-define=API_BASE_URL=${{ vars.API_BASE_URL }}
+            --dart-define=API_BASE_URL="$API_BASE_URL"
       # --no-web-resources-cdn 是给国内访问准备的，别删：
       # 默认情况下 Flutter 会去 Google 的 gstatic.com 下载 CanvasKit 渲染引擎，
       # 而 gstatic 在国内打不开 —— 结果是**一整个白屏**，什么都看不到。
@@ -115,7 +135,7 @@ jobs:
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}

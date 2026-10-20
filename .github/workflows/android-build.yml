@@ -46,7 +46,7 @@ on:
       record_seconds:
         description: '录屏时长（秒，上限 180）'
         required: false
-        default: '30'
+        default: '45'
       api_base_url:
         description: '后端地址。留空=只在云端模拟器里演示；填公网 https 地址=额外得到一个能装进你手机的 APK'
         required: false
@@ -64,6 +64,9 @@ jobs:
     # Linux 机器更快、排队更短，而且 24.04 目前远没有弃用风险
     # （对比 macos-14 那种有明确截止日期的坑，见 ios-build.yml 的注释）。
     runs-on: ubuntu-24.04
+    # 模拟器启动 + 编译两次 APK（正常版 + 演示版）+ 录屏，正常 20~35 分钟；
+    # 60 分钟还没完基本是卡住了。不设上限的话，卡死的任务会一直占着并烧掉免费分钟数。
+    timeout-minutes: 60
 
     steps:
       - name: 拉取代码
@@ -121,19 +124,23 @@ jobs:
         run: flutter test
 
       - name: 决定这次把哪个后端地址编进去
+        env:
+          # 走环境变量，别把用户输入直接拼进 shell 脚本
+          INPUT: ${{ github.event.inputs.api_base_url }}
         run: |
-          INPUT="${{ github.event.inputs.api_base_url }}"
           if [ -z "$INPUT" ]; then
             API="http://10.0.2.2:3000"
-            echo "MODE=模拟器模式（APK 装到真机上连不上，产物里只有录屏有用）" >> "$GITHUB_ENV"
+            MODE="模拟器模式（APK 装到真机上连不上，产物里只有录屏有用）"
           else
             API="$INPUT"
-            echo "MODE=真机模式（APK 可以直接装进手机）" >> "$GITHUB_ENV"
+            MODE="真机模式（APK 可以直接装进手机）"
           fi
-          # 写进 GITHUB_ENV，后面几步用 $API_BASE_URL 取，不用重复一遍这段判断
-          echo "API_BASE_URL=$API" >> "$GITHUB_ENV"
+          # 先赋值给当前 shell 的 MODE，这一行才能打印出内容；
+          # 再写进 GITHUB_ENV，后面几步用 $MODE / $API_BASE_URL 取。
           echo "本次模式：$MODE"
           echo "编进去的后端地址：$API"
+          echo "MODE=$MODE" >> "$GITHUB_ENV"
+          echo "API_BASE_URL=$API" >> "$GITHUB_ENV"
 
       - name: 从 Gradle 配置里读包名
         run: |
@@ -147,18 +154,33 @@ jobs:
           echo "APP_ID=$APP_ID" >> "$GITHUB_ENV"
           echo "包名：$APP_ID"
 
-      - name: 构建 APK
+      - name: 构建 APK（正常版 + 录屏演示版）
         working-directory: app
         run: |
           # --release 而不是 --debug：真机上要装的是 release 包。
           # 签名用的是 debug 密钥（见 app/android/app/build.gradle.kts 里的
           # signingConfig），所以**不需要你配密钥库**也能编出可安装的包。
           # 正式上架 Google Play 才需要换成自己的签名。
+          #
+          # 1) 正常版：如果你填了 api_base_url，它就真的连公网后端，可以装手机。
           flutter build apk --release --dart-define=API_BASE_URL="$API_BASE_URL"
-          ls -la build/app/outputs/flutter-apk/
+          cp build/app/outputs/flutter-apk/app-release.apk build/moneynote-release.apk
+
+          # 2) 录屏演示版：固定连本机模拟器后端，打开 DEMO_MODE。
+          #    App 启动后会自己走一遍「首页 → 记一笔 → 保存 → 统计 → 切月份」，
+          #    这样 45 秒视频里能看到真实功能，而不是停在首页。
+          #    它只装在模拟器里录屏，不会作为 APK 发出去。
+          flutter build apk --release \
+            --dart-define=API_BASE_URL=http://10.0.2.2:3000 \
+            --dart-define=DEMO_MODE=true
+          cp build/app/outputs/flutter-apk/app-release.apk build/moneynote-demo.apk
+
+          ls -la build/moneynote-release.apk build/moneynote-demo.apk
 
       - name: 在云端模拟器里安装、运行、录屏
         uses: reactivecircus/android-emulator-runner@v2
+        env:
+          RECORD_SECONDS: ${{ github.event.inputs.record_seconds }}
         with:
           api-level: 34
           target: google_apis
@@ -172,20 +194,33 @@ jobs:
           script: |
             set -e
 
-            DURATION="${{ github.event.inputs.record_seconds }}"
+            DURATION="$RECORD_SECONDS"
+            # 空值 / 非数字都先兜底，否则下面 `-gt` 会在 set -e 下直接退出，
+            # 报错还只是一句 "integer expression expected"，很难看出是输入的问题。
+            if ! echo "$DURATION" | grep -Eq '^[0-9]+$'; then
+              echo "录屏时长「$DURATION」不是数字，改用默认值 45"
+              DURATION=45
+            fi
             # screenrecord 的 --time-limit 上限就是 180 秒。填大了不会报错，
             # 而是**静默截断** —— 你会拿到一段比预期短的视频，还以为是脚本的问题。
             if [ "$DURATION" -gt 180 ]; then
               echo "录屏上限是 180 秒，$DURATION 改成 180"
               DURATION=180
             fi
+            if [ "$DURATION" -lt 5 ]; then
+              echo "录屏太短看不清，$DURATION 改成 5 秒"
+              DURATION=5
+            fi
 
             # 确认模拟器真的连上了，否则后面每一步都会以奇怪的方式失败
             adb wait-for-device
             echo "模拟器已连接：$(adb shell getprop ro.build.version.release)"
 
-            APK="build/app/outputs/flutter-apk/app-release.apk"
-            echo "安装 $APK"
+            # 装的是上一步复制出来的「录屏演示版」。
+            # 它已经带 DEMO_MODE=true，启动后会自动演示功能。
+            # 正常版留在 app/build/moneynote-release.apk，最后作为 artifact 上传。
+            APK="app/build/moneynote-demo.apk"
+            echo "安装录屏演示版 $APK"
             adb install -r "$APK"
 
             # 先开录，再启动 App —— 这样视频里有启动那一下，更像真的在用
@@ -212,9 +247,15 @@ jobs:
 
       - name: 后端日志
         if: always()
-        run: cat /tmp/backend.log
+        run: |
+          if [ -f /tmp/backend.log ]; then
+            cat /tmp/backend.log
+          else
+            echo "没有后端日志（后端可能没起来）"
+          fi
 
       - name: 上传录屏和截图
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-emulator-recording
@@ -222,30 +263,38 @@ jobs:
             /tmp/android-demo.mp4
             /tmp/android-screenshot.png
           retention-days: 30
+          # 模拟器那一步挂了就没有文件，这里只警告、不再制造第二个红叉，
+          # 免得真正的失败原因被"artifact 找不到"盖住。
+          if-no-files-found: warn
 
       - name: 上传 APK
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: android-apk
-          path: app/build/app/outputs/flutter-apk/app-release.apk
+          # 上传的是正常版，不是自动演示版；下载后可以正常装手机。
+          path: app/build/moneynote-release.apk
           retention-days: 30
+          if-no-files-found: warn
 
       - name: 写一份人话总结
         if: always()
+        env:
+          API_INPUT: ${{ github.event.inputs.api_base_url }}
         run: |
           {
             echo "## 这次跑完了，你拿到了什么"
             echo ""
             echo "| 产物 | 说明 |"
             echo "|---|---|"
-            echo "| \`android-emulator-recording\` | 云端安卓模拟器上的录屏 + 一张截图。**下载后在运行页面最下面** |"
-            echo "| \`android-apk\` | 编译出来的安装包 |"
+            echo "| \`android-emulator-recording\` | 云端安卓模拟器上的功能录屏（首页 → 记一笔 → 保存 → 统计 → 切月份）+ 一张截图。**下载后在运行页面最下面** |"
+            echo "| \`android-apk\` | 正常安装包（不会自动演示，可装手机） |"
             echo ""
             echo "**本次模式**：$MODE"
             echo ""
             echo "编进去的后端地址：\`$API_BASE_URL\`"
             echo ""
-            if [ -z "${{ github.event.inputs.api_base_url }}" ]; then
+            if [ -z "$API_INPUT" ]; then
               echo "> ⚠️ 这个 APK 是「模拟器模式」的，装到你手机上打开会显示连不上 ——"
               echo "> 因为 10.0.2.2 只在模拟器里有效。"
               echo "> 想要能装进手机的 APK，把后端按 docs/06-部署后端到公网.md 部署好，"

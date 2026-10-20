@@ -11,7 +11,6 @@ import {
   getStats,
   listRecords,
   replaceRecord,
-  toCents,
 } from './repo.js';
 
 export const router = Router();
@@ -72,6 +71,10 @@ function parseRange(query) {
     if (!DATE_RE.test(from) || !DATE_RE.test(to)) {
       throw new HttpError(400, 'BAD_RANGE', 'from / to 格式应为 YYYY-MM-DD');
     }
+    // 格式对不代表日期真实存在。2026-02-30 也能过上面的正则，
+    // 然后被当成字符串边界去查库 —— 结果不报错，只是悄悄少查/多查。
+    assertRealDate(from);
+    assertRealDate(to);
     if (from > to) {
       throw new HttpError(400, 'BAD_RANGE', 'from 不能晚于 to');
     }
@@ -155,13 +158,11 @@ function parseRecordBody(body) {
   if (amount > MAX_AMOUNT) {
     throw new HttpError(400, 'BAD_AMOUNT', `amount 不能超过 ${MAX_AMOUNT}`);
   }
-  // 入库是按"分"存的，所以小于半分钱的金额四舍五入后是 0 分，
-  // 会撞上表上的 CHECK (amount_cents > 0)，抛出一个没人处理的
-  // SQLite 错误 -> 500「服务器内部错误」。
-  // 那是**前端传错了**，不是服务器坏了，就该在这里返回 400 说清楚。
-  // 这里复用 repo 的 toCents，保证"校验时算出来的分"和
-  // "真正存进去的分"永远是同一个数。
-  if (toCents(amount) < 1) {
+  // API 的最小单位是 0.01 元。这里必须按 0.01 拦，而不是只按
+  // "四舍五入后是不是 0 分" 拦：0.005 会 Math.round 成 1 分，
+  // 于是接口收下 0.005、回显 0.01，前端以为存的是自己输入的金额。
+  // 这种"收下了但偷偷改掉"比直接 400 更难发现。
+  if (amount < 0.01) {
     throw new HttpError(400, 'BAD_AMOUNT', 'amount 不能小于 0.01');
   }
 

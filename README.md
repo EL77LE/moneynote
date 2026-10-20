@@ -1,8 +1,24 @@
-# MoneyNote —— 双端原生记账 App
+# MoneyNote —— Flutter 双端记账 App
 
-一个**从零开始、用 AI 协作完成**的移动端项目：一套 Dart 代码，编译成 Android 和 iOS 两个平台的真原生 App，配一个自己的后端 API。
+一个**从零开始、用 AI 协作完成**的移动端项目：一套 Dart 代码，编译成 Android 和 iOS 两个平台上能安装、能运行的 App，配一个自己的 Node.js 后端 API。
+
+> **技术栈说明（先看这一行，避免误解）**：
+> 这是 **Flutter 跨平台**项目，不是 Kotlin 和 Swift 各写一套的「双端原生」。
+> 仓库里的 `app/android/` 和 `app/ios/` 是 Flutter 维护的原生工程目录，
+> 用它们能编译出真正的 APK 和 iOS App，但业务代码只有一份 Dart。
+> 投递时请写「Flutter 实现 Android + iOS 双端」，这样最准确，也经得起追问。
 
 做这个项目的**唯一目的**，是让你能给 `ltx@techlz.com` 发一封有东西可看的邮件。
+
+---
+
+## 完全零基础？先看这一篇
+
+> **[docs/00-零基础照做.md](docs/00-零基础照做.md)** —— 从「什么都没有」开始，一步一步写清楚：
+> 怎么注册 GitHub、怎么拿令牌、怎么自动得到两段录屏、怎么把后端免费部署到云端、
+> 怎么让 App 连上公网、没有服务器时怎么用自己电脑做临时公网演示。
+>
+> 不需要 Mac、服务器、域名、信用卡，也不需要懂 Linux。
 
 ---
 
@@ -13,8 +29,11 @@
 
 | 它自动做 | 产出 |
 |---|---|
-| 建公开仓库、推代码 | `https://github.com/EL77LE/moneynote` ← **项目链接** |
-| 在 GitHub 免费的 macOS 机器上编译 iOS、启动模拟器、录 30 秒屏 | `dist\demo-ios.mp4` ← **应用功能录屏** |
+| 建公开仓库、推代码 | `https://github.com/<你的用户名>/moneynote` ← **项目链接** |
+| 在 GitHub 免费的 macOS 机器上编译 iOS、启动模拟器，自动演示 45 秒并录屏 | `dist\demo-ios.mp4` ← **iOS 功能录屏** |
+| 同时在 Ubuntu 机器上编译 Android、启动模拟器，自动演示 45 秒并录屏 | `dist\demo-android.mp4` ← **安卓功能录屏** |
+
+录屏不是只停在首页：App 会自动走一遍「首页 → 记一笔 → 保存 → 统计 → 切月份」。
 
 **唯一需要你动手的地方**：第一次会要你粘一个 GitHub 令牌。
 30 秒，之后永久免。为什么这一件不能自动，见 [14](docs/14-一键交付.md) 第 0 节。
@@ -64,7 +83,7 @@ flutter run
 
 | 周 | 做什么 | 完成的标志 |
 |---|---|---|
-| **第 1 周** | 装环境，跑通后端和 App | 模拟器里能看到首页和 60 多条假数据 |
+| **第 1 周** | 装环境，跑通后端和 App | 模拟器里能看到首页和几十条假数据 |
 | **第 2 周** | 读代码 + 改功能 | 能自己加一个新分类；能解释每个文件在干嘛 |
 | **第 3 周** | 打包 + 录屏 + 传 GitHub | 手机上有 App；有一段 90 秒的录屏 |
 | **第 4 周** | 准备面谈 + 发邮件 | 邮件已发出，8 个高频问题能张口就答 |
@@ -98,20 +117,24 @@ App 有三个界面：
 demo0/
 ├── README.md              ← 你在这
 ├── docs/                  ← 操作手册，按顺序看
-├── .github/workflows/     ← 自动构建：iOS 模拟器录屏、网页版部署
+├── .github/workflows/     ← 自动构建：iOS 录屏、安卓录屏、网页版部署
 ├── scripts/               ← 一键交付、一键测试、截图、工作流检查
-├── 一键交付.bat            ← 双击它 = 自动拿到项目链接 + iOS 录屏
+├── 一键交付.bat            ← 双击它 = 自动拿到项目链接 + 双端录屏
 ├── run-tests.bat          ← 双击它 = 跑下面那套测试
+├── render.yaml            ← Render 一键部署后端（Blueprint 只认根目录）
 ├── secrets/               ← 存 GitHub 令牌（**不会进 git**，脚本自动建）
 ├── dist/                  ← 下载下来的录屏（**不会进 git**，脚本自动建）
 ├── backend/               ← Node + Express + SQLite 后端
 │   ├── src/
+│   │   ├── env.js         读取 backend/.env（Node 自带，不引 dotenv）
 │   │   ├── db.js          打开数据库、建表
 │   │   ├── repo.js        所有 SQL。换数据库只改这里
 │   │   ├── routes.js      参数校验 + 路由。不碰 SQL
 │   │   ├── server.js      中间件、统一错误出口、启动
 │   │   └── seed.js        演示数据生成
-│   ├── scripts/smoke.js   75 条断言的冒烟测试
+│   ├── scripts/smoke.js   77 条断言的冒烟测试
+│   ├── Dockerfile         自建服务器 / 容器平台用
+│   ├── docker-compose.yml VPS 一键部署（端口、持久化、健康检查都配好）
 │   └── README.md          接口文档
 └── app/                   ← Flutter 前端
     ├── lib/
@@ -146,7 +169,7 @@ demo0/
 | [11 上传到 GitHub](docs/11-上传到GitHub.md) | 第 3 周。**"项目链接"就是它** |
 | [12 部署到网页端](docs/12-部署到网页端.md) | 加分项：让 HR 点开就能用 |
 | [13 只有安卓怎么测](docs/13-只有安卓怎么测.md) | **只有安卓手机、没有 Mac**，却要证明"双端"。从零到交付的完整一条路 |
-| [14 一键交付](docs/14-一键交付.md) | **想最快交作业**：双击一个文件，自动拿到项目链接和 iOS 录屏 |
+| [14 一键交付](docs/14-一键交付.md) | **想最快交作业**：双击一个文件，自动拿到项目链接和双端录屏 |
 
 ---
 
@@ -183,11 +206,11 @@ demo0/
 | 命令 | 结果 |
 |---|---|
 | `npm install` | 67 个包，5 秒 |
-| `npm run smoke` | **75 条断言全部通过** |
-| `npm run seed` | 生成 65 条数据 |
+| `npm run smoke` | **77 条断言全部通过** |
+| `npm run seed` | 生成几十条数据（每次随机） |
 | 真启服务 + `curl` 打真实请求 | 中文、金额精度、错误码全部正确 |
 | 访问日志 | 每个请求打一行 `[状态码] 方法 路径 (耗时) 时间`，实测输出正确。真机调试时靠它确认"操作真的到了服务器" |
-| `AUTO_SEED=1` 空库自动补数据 | 实测三种情况：空库 → 自动写入 65 条；已有数据 → **跳过且不删**（手动插的记录重启后仍在）；不设这个变量 → 空库保持为空（所以 smoke 的空库断言不受影响） |
+| `AUTO_SEED=1` 空库自动补数据 | 实测三种情况：空库 → 自动写入几十条；已有数据 → **跳过且不删**（手动插的记录重启后仍在）；不设这个变量 → 空库保持为空（所以 smoke 的空库断言不受影响） |
 
 **App —— 编译、测试、浏览器实测，全过。**
 
@@ -195,13 +218,13 @@ demo0/
 |---|---|
 | `flutter pub get` | Got dependencies |
 | `flutter analyze` | **No issues found!**（0 error / 0 warning / 0 info） |
-| `flutter test` | **All tests passed!**（53 个） |
+| `flutter test` | **All tests passed!**（54 个） |
 | `flutter build web --release` | √ Built build\web |
 
-#### `.github/workflows/` 里的两个工作流 —— 静态检查通过，而且反向验证过
+#### `.github/workflows/` 里的三个工作流 —— 静态检查通过，而且反向验证过
 
-检查器是 [`scripts/check-workflows.mjs`](scripts/check-workflows.mjs)。它在两个 yml 上都报了绿，
-但"报绿"本身说明不了什么 —— 所以分别注入了三种故障，确认它**真的会红**：
+检查器是 [`scripts/check-workflows.mjs`](scripts/check-workflows.mjs)。它在三个 yml（iOS / Android / Web）上都报了绿，
+但"报绿"本身说明不了什么 —— 所以拿 `ios-build.yml` 分别注入了三种故障，确认它**真的会红**：
 
 | 注入的故障 | 期望 |
 |---|---|
@@ -252,7 +275,7 @@ Flutter 编译成网页版跑起来，连本机后端，用 headless 浏览器�
 |---|---|
 | **Android APK 真机安装** | 这台机器没装 Android SDK 和模拟器，见 [01](docs/01-环境搭建.md) |
 | **iOS 编译** | **必须有 macOS**，Windows 上做不到，见 [05](docs/05-录屏与打包.md) |
-| **两个 GitHub 工作流真跑一次** | 本地仓库已经建好（`git init` + 首次提交已完成），但**代码还没推到 GitHub**，workflow 从没被 GitHub 解析过。只做了[静态检查](#githubworkflows-里的两个工作流--静态检查通过而且反向验证过)，那查不到镜像标签和 action 版本是否还有效 |
+| **三个 GitHub 工作流真跑一次** | 本地仓库已经建好（`git init` + 首次提交已完成），但**代码还没推到 GitHub**，workflow 从没被 GitHub 解析过。只做了[静态检查](#githubworkflows-里的三个工作流--静态检查通过而且反向验证过)，那查不到镜像标签和 action 版本是否还有效 |
 | **一键交付脚本的后四步** | 建仓库、推代码、触发构建、下载录屏 —— 这四步需要**真令牌**。用假令牌只验到了"网络和认证链路是通的"（拿到了 GitHub 真实返回的 401） |
 | **没有 TLS 拦截的网络环境** | 证书自愈逻辑只在这台机器上验过（本机有拦截，走的是"重启自己"那条分支）。没有拦截的网络会走另一条分支，逻辑上更简单，但**没实测过** |
 | **Docker 镜像构建** | 这台机器没装 Docker（`which docker` 找不到），`backend/Dockerfile` **从未真正构建过**。见 [06 §用 Dockerfile 部署](docs/06-部署后端到公网.md) |

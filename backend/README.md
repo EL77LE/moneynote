@@ -7,7 +7,7 @@ Express 5 + Node 内置 SQLite。**没有任何原生依赖**，`npm install` �
 ```bash
 cd backend
 npm install
-npm run seed     # 生成 60 多条演示数据（会清空旧数据）
+npm run seed     # 生成几十条演示数据（每次随机，会清空旧数据）
 npm run dev      # 启动，改代码自动重启
 ```
 
@@ -62,19 +62,33 @@ npm run dev      # 启动，改代码自动重启
 npm run smoke
 ```
 
-会自己拉起一个临时服务（独立端口 + 临时数据库），打 61 条断言，跑完自动清理。**不会动你 `data/` 里的真实数据。** 全部通过退出码 0。
+会自己拉起一个临时服务（独立端口 + 临时数据库），打 77 条断言，跑完自动清理。**不会动你 `data/` 里的真实数据。** 全部通过退出码 0。
 
 覆盖了：月份边界（闰年 2 月是 29 天）、8 种参数非法输入、404 路径、重复删除、`0.1 + 0.2` 的金额精度、排序、聚合。
 
 ## 环境变量
 
 全都有默认值，本地开发一个都不用配。见 `.env.example`。
+把 `.env.example` 复制成 `.env` 就能改，启动时自动读取（不引入 dotenv，用的是 Node 自带的 `process.loadEnvFile()`）。已存在的系统环境变量优先级更高，不会被 `.env` 覆盖。
 
 | 变量 | 默认 | 说明 |
 |---|---|---|
 | `PORT` | `3000` | 监听端口 |
-| `DB_PATH` | `./data/moneynote.db` | 数据库文件；填 `:memory:` 就是内存库 |
+| `DB_PATH` | `./data/moneynote.db` | 数据库文件；相对路径按 `backend/` 解析，父目录会自动创建；填 `:memory:` 就是内存库 |
 | `CORS_ORIGIN` | 不限制 | 上线后建议设成白名单，逗号分隔 |
+| `AUTO_SEED` | 不开启 | 设成 `1` 时，**空库**启动会自动灌演示数据；有数据就跳过，不会清库 |
+
+## Docker / VPS 部署
+
+仓库里有 `Dockerfile` 和 `docker-compose.yml`。在 `backend/` 下：
+
+```bash
+docker compose up -d --build   # 构建并后台启动
+docker compose logs -f         # 看日志
+docker compose down            # 停止（./data 里的数据库还在）
+```
+
+端口、`AUTO_SEED=1`、数据持久化、健康检查都已经写在 compose 文件里。
 
 ## 数据存在哪
 

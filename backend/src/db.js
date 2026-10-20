@@ -10,20 +10,33 @@
  *   0.1 + 0.2 !== 0.3。用浮点数存钱，累加多了会出现 12.299999999999999。
  *   所以数据库统一存整数分，只在 API 出入口做一次换算。
  */
+// 必须放在最前面：它要在下面计算 DB_PATH 之前把 backend/.env 读进来。
+// ESM 的 import 按声明顺序执行，所以这一行不能挪到后面。
+import './env.js';
+
 import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync } from 'node:fs';
-import { dirname, resolve } from 'node:path';
+import { dirname, isAbsolute, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const here = dirname(fileURLToPath(import.meta.url));
+const backendRoot = resolve(here, '..');
 
 function resolveDbPath() {
   const custom = process.env.DB_PATH;
   // 内存库：测试用，进程退出即消失
   if (custom === ':memory:') return ':memory:';
-  if (custom) return resolve(custom);
+  if (custom) {
+    // 相对路径按 backend/ 解析，而不是按"你从哪个目录启动 node"解析。
+    // 否则在仓库根目录跑 node backend/src/server.js 时，
+    // DB_PATH=./data/moneynote.db 会落到仓库根目录的 data/ 里，
+    // 和 README 里写的 backend/data/moneynote.db 对不上。
+    const dbPath = isAbsolute(custom) ? custom : resolve(backendRoot, custom);
+    mkdirSync(dirname(dbPath), { recursive: true });
+    return dbPath;
+  }
 
-  const dir = resolve(here, '..', 'data');
+  const dir = resolve(backendRoot, 'data');
   mkdirSync(dir, { recursive: true });
   return resolve(dir, 'moneynote.db');
 }

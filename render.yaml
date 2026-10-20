@@ -3,8 +3,13 @@
 # 用法：把整个仓库推到 GitHub，然后在 Render 里选 New -> Blueprint，
 # 指向这个仓库，它会自动读到本文件。
 #
-# ⚠️ 免费档的磁盘是临时的：重新部署后 SQLite 数据会清空。
-#    录屏演示够用了（重新跑一次 seed 即可），别放真实数据。
+# ⚠️ 这个文件必须放在**仓库根目录**。Render 的 Blueprint 只会自动读取
+#    根目录的 render.yaml；放在 backend/ 下面它找不到，不会报错，
+#    只是 Blueprint 列表里看不到这个服务。所以这里用 rootDir: backend
+#    指到后端目录，而不是把 render.yaml 放进 backend/。
+#
+# ⚠️ 免费档的磁盘是临时的：重新部署或休眠后 SQLite 数据会清空。
+#    录屏演示够用了（AUTO_SEED 会自动补数据），别放真实数据。
 services:
   - type: web
     name: moneynote-api
@@ -18,7 +23,7 @@ services:
     envVars:
       - key: NODE_VERSION
         value: '24'
-      # 空库时自动补一批演示数据（见 src/server.js 的 seedIfEmpty）。
+      # 空库时自动补一批演示数据（见 backend/src/server.js 的 seedIfEmpty）。
       # 免费档磁盘是临时的，重启就清空 —— 没有这个开关，
       # 面试官点开 App 看到的是一个空账本，会以为项目是坏的。
       # 只在空库时动手，不会清掉已有数据。

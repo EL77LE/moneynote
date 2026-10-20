@@ -11,23 +11,25 @@
  *   [1/6] 检查环境，拿到 GitHub 令牌
  *   [2/6] 在 GitHub 上建一个公开仓库（已存在就跳过）
  *   [3/6] 把代码推上去（令牌只用这一次，不落盘）
- *   [4/6] 触发云端的 iOS 构建 + 模拟器录屏（GitHub 的免费 macOS 机器）
- *   [5/6] 等它跑完，把录屏下载到 dist\
+ *   [4/6] 触发云端的 iOS + 安卓构建与模拟器录屏
+ *   [5/6] 等它们跑完，把两段录屏下载到 dist\
  *   [6/6] 打印交付清单
  *
  * ---------------------------------------------------------------------------
- * 为什么是「iOS 录屏」而不是「安卓录屏」
+ * 为什么会拿到两段录屏（iOS + 安卓）
  * ---------------------------------------------------------------------------
- * 因为只有 iOS 这一段能被完整自动化：GitHub 免费给一台 macOS 机器，
- * 装 Flutter、编译 iOS、启动模拟器、录屏、打包上传，全程无人值守，
- * 本机不需要装任何东西。
+ * 两端都跑在 GitHub 的免费 CI 机器上，本机一个字节都不用装：
+ *   - iOS：macOS 机器 + Xcode 模拟器 + `simctl recordVideo`
+ *   - 安卓：Ubuntu 机器 + Android SDK/模拟器 + `adb shell screenrecord`
+ * 每个工作流自己启动后端、编译 App、启动模拟器、录屏、上传，
+ * 全程无人值守。招聘要的「双端」，证据就是这两段视频加工两个原生工程目录。
  *
- * 安卓录屏做不到自动化 —— 它需要在本机装 Android SDK、插一根真机数据线、
- * 用 scrcpy 对着手机操作，全是物理动作。所以安卓那一段仍然留在
- * docs/05-录屏与打包.md 里作为可选手动步骤。
+ * 注意：Flutter 是跨平台框架，不是 Kotlin 和 Swift 各写一套。
+ * 仓库里的 app/android/ 和 app/ios/ 是 Flutter 生成并维护的原生工程壳，
+ * 邮件里要如实写「Flutter 实现 Android + iOS 双端」，别写成「双端原生」。
  *
- * 招聘原文要的是「至少展示一个」。iOS 录屏这一个，加上仓库里真实存在的
- * app/android/ 和 app/ios/ 两个原生工程，就是「双端原生 demo」的证据。
+ * 真机录屏仍然做不到自动化 —— 那需要插数据线、在手机上点。
+ * 这一段留在 docs/05-录屏与打包.md 里作为可选手动步骤。
  *
  * ---------------------------------------------------------------------------
  * 有且只有两件事**没法**自动化（这是硬约束，不是偷懒）
@@ -73,14 +75,46 @@ import { fileURLToPath } from 'node:url';
 
 const ROOT = join(dirname(fileURLToPath(import.meta.url)), '..');
 
-/** GitHub 用户名。要换账号就改这一行。 */
-const OWNER = 'EL77LE';
-/** 仓库名。 */
-const REPO = 'moneynote';
+/** GitHub 用户名。启动时用令牌问 GitHub 要（GET /user），不用手改。 */
+let OWNER = '';
+/** 仓库名。默认 moneynote，可用环境变量 GITHUB_REPO 覆盖。 */
+const REPO = (process.env.GITHUB_REPO ?? '').trim() || 'moneynote';
 /** 主分支名。 */
 const BRANCH = 'main';
-/** iOS 工作流的文件名（在 .github/workflows/ 下）。 */
-const WORKFLOW_FILE = 'ios-build.yml';
+
+/**
+ * 要触发的两个工作流。
+ *
+ * 为什么两个都触发：招聘要的是「双端」。iOS 和安卓各有一段云端模拟器录屏，
+ * 两段放在一起，比任何文字说明都直接。两个任务在 GitHub 上是并行跑的，
+ * 总耗时基本等于慢的那个（iOS）。
+ *
+ * input 里传什么：iOS 只有 record_seconds；安卓多一个 api_base_url。
+ * GitHub 对 workflow_dispatch 的未声明输入会报 422，所以必须按各自的定义传。
+ */
+const WORKFLOWS = [
+  {
+    key: 'ios',
+    file: 'ios-build.yml',
+    label: 'iOS 模拟器',
+    artifact: 'ios-simulator-recording',
+    outBase: 'demo-ios',
+    inputs: { record_seconds: '45' },
+  },
+  {
+    key: 'android',
+    file: 'android-build.yml',
+    label: '安卓模拟器',
+    artifact: 'android-emulator-recording',
+    outBase: 'demo-android',
+    inputs: {
+      record_seconds: '45',
+      // 配了公网后端就顺手编一个能装真机的 APK；没配就留空，走模拟器模式。
+      // 末尾斜杠会拼出 //api/...，这里顺手去掉（和前端 ApiClient 的行为一致）。
+      api_base_url: (process.env.API_BASE_URL ?? '').trim().replace(/\/+$/, ''),
+    },
+  },
+];
 
 /** 令牌存放位置 */
 const SECRETS_DIR = join(ROOT, 'secrets');
@@ -285,7 +319,7 @@ function checkEnvironment() {
   // --- 本目录是不是 git 仓库 ---
   const isRepo = git(['rev-parse', '--git-dir']).ok;
   if (!isRepo) {
-    fail('这个目录还不是 git 仓库，先跑一次「一键测试.bat」，或看 docs/11 第 3 节。');
+    fail('这个目录还不是 git 仓库，先跑一次「run-tests.bat」，或看 docs/11 第 3 节。');
     return null;
   }
   ok('本目录已经是 git 仓库');
@@ -620,6 +654,23 @@ async function api(path, { method = 'GET', body, allow404 = false, token } = {})
 
 /* ==================== 第 2 步：建仓库 ==================== */
 
+/**
+ * 用令牌问 GitHub「我是谁」，拿到用户名。
+ *
+ * 为什么不在代码里写死：写死之后换个账号就会去操作别人的仓库，
+ * 报错还是 404 / 403 这类看不出原因的东西。令牌本身就知道答案，问一次最可靠。
+ */
+async function resolveOwner(token) {
+  const me = await api('/user', { token });
+  if (!me?.login) {
+    const err = new Error('拿不到令牌对应的 GitHub 用户名');
+    err.detail = 'GET /user 返回的内容里没有 login 字段。令牌可能不是个人访问令牌。';
+    throw err;
+  }
+  OWNER = me.login;
+  ok(`GitHub 账号：${OWNER}`);
+}
+
 async function ensureRepo(token) {
   step(2, 6, '在 GitHub 上准备仓库');
 
@@ -627,15 +678,18 @@ async function ensureRepo(token) {
 
   if (existing) {
     ok(`仓库已存在：${existing.full_name}`);
-    const vis = existing.private ? '私有' : '公开';
     if (existing.private) {
-      warn(`⚠️ 这个仓库现在是「私有」的。`);
-      info('招聘方要的是「项目链接」，私有仓库别人点开是 404 —— 他不会来问你，只会认为链接是坏的。');
-      info(`去这里改成公开：https://github.com/${OWNER}/${REPO}/settings`);
-      info('（Settings 页拉到最下面 Danger Zone → Change repository visibility）');
-    } else {
-      ok(`可见性：${vis} ✓`);
+      warn('这个仓库现在是「私有」的 —— 招聘方点开只会看到 404。');
+      info('正在自动改成公开...');
+      const updated = await api(`/repos/${OWNER}/${REPO}`, {
+        method: 'PATCH',
+        body: { private: false },
+        token,
+      });
+      ok(`可见性已改为：${updated.private ? '私有' : '公开'} ✓`);
+      return updated;
     }
+    ok('可见性：公开 ✓');
     return existing;
   }
 
@@ -644,7 +698,7 @@ async function ensureRepo(token) {
     method: 'POST',
     body: {
       name: REPO,
-      description: '双端原生记账 App · Flutter + Node.js',
+      description: 'Flutter 跨平台记账 App（Android + iOS）+ Node.js 后端',
       private: false,
       // auto_init: false 是关键 —— 让它别自动生成 README。
       // 一旦远端有了提交，我们本地的 push 就会被拒（non-fast-forward），
@@ -734,19 +788,19 @@ async function pushCode(token) {
   if (r.stdout) info(r.stdout.split('\n')[0]);
 }
 
-/* ================== 第 4 步：触发 iOS 构建 ================== */
+/* ================== 第 4 步：触发双端构建 ================== */
 
 /**
- * 等 GitHub 把我们的 workflow 文件注册好。
+ * 触发一个 workflow。
  *
  * 坑：刚 push 完的那几秒，GitHub 还在后台索引 .github/workflows/，
  * 这时候调 dispatch 接口会返回 404「找不到这个 workflow」——
  * 而文件明明就在那儿。直接报错会让用户以为是自己哪里做错了。
  * 所以这里要重试，而不是一失败就放弃。
  */
-async function dispatchWorkflow(token) {
-  const path = `/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW_FILE}/dispatches`;
-  const body = { ref: BRANCH, inputs: { record_seconds: '30' } };
+async function dispatchWorkflow(token, wf) {
+  const path = `/repos/${OWNER}/${REPO}/actions/workflows/${wf.file}/dispatches`;
+  const body = { ref: BRANCH, inputs: wf.inputs };
 
   let lastErr = null;
   for (let i = 1; i <= 12; i++) {
@@ -762,12 +816,12 @@ async function dispatchWorkflow(token) {
     }
   }
 
-  const err = new Error('触发了 12 次都没成功（每次间隔 10 秒，共 2 分钟）');
+  const err = new Error(`触发了 12 次都没成功（每次间隔 10 秒，共 2 分钟）`);
   err.detail =
     `${lastErr?.detail ?? ''}\n\n` +
-    `如果一直是 404，最可能的原因是：工作流文件没被推上去。\n` +
-    `去 https://github.com/${OWNER}/${REPO}/actions 看看页面上有没有\n` +
-    `「iOS 模拟器构建与录屏」这一项。没有的话，说明 .github/workflows/ 没传上去。`;
+    `如果一直是 404，最可能的原因是：${wf.file} 没被推上去。\n` +
+    `去 https://github.com/${OWNER}/${REPO}/actions 看看有没有对应的\n` +
+    `「${wf.label}」工作流。没有的话，说明 .github/workflows/ 没传上去。`;
   throw err;
 }
 
@@ -777,9 +831,9 @@ async function dispatchWorkflow(token) {
  * dispatch 接口**不返回 run id**（这是个已知的 API 设计问题），
  * 所以只能反过来查列表，再按创建时间挑出我们这一次。
  */
-async function findRun(token, dispatchedAtMs) {
+async function findRun(token, wf, dispatchedAtMs) {
   const path =
-    `/repos/${OWNER}/${REPO}/actions/workflows/${WORKFLOW_FILE}/runs` +
+    `/repos/${OWNER}/${REPO}/actions/workflows/${wf.file}/runs` +
     `?event=workflow_dispatch&per_page=10`;
 
   for (let i = 0; i < 20; i++) {
@@ -790,35 +844,57 @@ async function findRun(token, dispatchedAtMs) {
     if (mine) return mine;
     await sleep(5_000);
   }
-  throw new Error('触发了构建，但 100 秒内没在列表里找到它。去仓库的 Actions 页面看一眼。');
+  throw new Error(`触发了 ${wf.label} 构建，但 100 秒内没在列表里找到它。去仓库的 Actions 页面看一眼。`);
 }
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 
-/** 轮询到这次运行结束。 */
-async function waitForRun(token, initialRun) {
+/**
+ * 轮询到**所有**运行结束。
+ *
+ * 为什么不一个个等：两个工作流在 GitHub 上是并行跑的。
+ * 串行轮询的话，界面上会先显示「iOS 构建中 20 分钟」，然后才轮到安卓，
+ * 用户会以为安卓根本没开始。这里用一条状态行同时显示两边。
+ */
+async function waitForRuns(token, jobs) {
   const started = Date.now();
-  let run = initialRun;
 
   for (;;) {
-    if (run.status === 'completed') return run;
+    if (jobs.every((j) => j.run.status === 'completed')) return;
 
     const elapsed = Date.now() - started;
     if (elapsed > BUILD_TIMEOUT_MS) {
+      const stuck = jobs.filter((j) => j.run.status !== 'completed');
       const err = new Error(`等了 ${human(elapsed)} 还没结束，先不等了`);
-      err.detail =
-        `这次运行还在跑：${run.html_url}\n` +
-        `你可以直接打开那个链接看进度。跑完之后在页面底部的 Artifacts 里下载录屏。`;
+      err.detail = stuck
+        .map((j) => `${j.label} 还在跑：${j.run.html_url}`)
+        .join('\n') + '\n跑完之后在页面底部的 Artifacts 里下载录屏。';
       throw err;
     }
 
-    const label = run.status === 'queued' ? '排队中' : '构建中';
+    const parts = jobs.map((j) => {
+      const s =
+        j.run.status === 'completed'
+          ? j.run.conclusion === 'success'
+            ? '完成 ✓'
+            : `失败（${j.run.conclusion}）`
+          : j.run.status === 'queued'
+            ? '排队中'
+            : '构建中';
+      return `${j.label} ${s}`;
+    });
     process.stdout.write(
-      `\r       ${label}… 已等 ${human(elapsed)}（每 30 秒看一次，不用管它）   `,
+      `\r       ${parts.join(' · ')}… 已等 ${human(elapsed)}（每 30 秒看一次）   `,
     );
 
     await sleep(POLL_MS);
-    run = await api(`/repos/${OWNER}/${REPO}/actions/runs/${run.id}`, { token });
+    await Promise.all(
+      jobs
+        .filter((j) => j.run.status !== 'completed')
+        .map(async (j) => {
+          j.run = await api(`/repos/${OWNER}/${REPO}/actions/runs/${j.run.id}`, { token });
+        }),
+    );
   }
 }
 
@@ -913,8 +989,9 @@ function findFile(dir, ext) {
   return null;
 }
 
-async function fetchRecording(token, run) {
-  step(5, 6, '下载录屏');
+async function fetchRecording(token, job) {
+  const { run, wf } = job;
+  step(5, 6, `下载录屏（${wf.label}）`);
 
   const { artifacts } = await api(`/repos/${OWNER}/${REPO}/actions/runs/${run.id}/artifacts`, {
     token,
@@ -930,7 +1007,7 @@ async function fetchRecording(token, run) {
 
   // 优先挑我们那个；万一名字变了，就挑最大的那个（录屏肯定最大）
   const target =
-    artifacts.find((a) => a.name === 'ios-simulator-recording') ??
+    artifacts.find((a) => a.name === wf.artifact) ??
     [...artifacts].sort((a, b) => b.size_in_bytes - a.size_in_bytes)[0];
 
   info(`产物：${target.name}（${(target.size_in_bytes / 1024 / 1024).toFixed(1)} MB）`);
@@ -942,27 +1019,27 @@ async function fetchRecording(token, run) {
   await downloadArtifact(target.archive_download_url, token, zipPath);
   ok('下载完成');
 
-  const extractDir = join(DIST_DIR, 'ios');
+  const extractDir = join(DIST_DIR, wf.key);
   const how = unzip(zipPath, extractDir);
   ok(`解压完成（用的 ${how}）`);
 
   const mp4 = findFile(extractDir, '.mp4');
   const png = findFile(extractDir, '.png');
 
-  const out = { mp4: null, png: null };
+  const out = { label: wf.label, mp4: null, png: null };
 
   if (mp4) {
     // 换个好认的名字，方便你直接拖进邮件
-    out.mp4 = join(DIST_DIR, 'demo-ios.mp4');
+    out.mp4 = join(DIST_DIR, `${wf.outBase}.mp4`);
     rmSync(out.mp4, { force: true });
     renameSync(mp4, out.mp4);
     ok(`录屏：${out.mp4}（${(statSync(out.mp4).size / 1024 / 1024).toFixed(1)} MB）`);
   } else {
-    warn('解压出来没找到 .mp4 —— 去 dist\\ios\\ 里看看有什么。');
+    warn(`解压出来没找到 .mp4 —— 去 dist\\${wf.key}\\ 里看看有什么。`);
   }
 
   if (png) {
-    out.png = join(DIST_DIR, 'ios-截图.png');
+    out.png = join(DIST_DIR, `${wf.outBase}-截图.png`);
     rmSync(out.png, { force: true });
     renameSync(png, out.png);
     ok(`截图：${out.png}`);
@@ -976,7 +1053,7 @@ async function fetchRecording(token, run) {
 
 /* ===================== 第 6 步：交付清单 ===================== */
 
-function summary(recording) {
+function summary(recordings) {
   step(6, 6, '你现在有了什么');
 
   const repoUrl = `https://github.com/${OWNER}/${REPO}`;
@@ -990,22 +1067,31 @@ function summary(recording) {
   console.log('  │  能看到文件列表 = 好的；跳到登录页 = 仓库还是私有的。');
   console.log('  └─────────────────────────────────────────────────────────');
   console.log('');
-  console.log('  ┌─ ② 应用功能录屏 ────────────────────────────────────────');
-  if (recording.mp4) {
-    console.log(`  │  ${recording.mp4}`);
-  } else {
-    console.log('  │  （这次没下到 mp4，去 dist\\ 里看看）');
+  console.log('  ┌─ ② 应用功能录屏（双端）─────────────────────────────────');
+  if (recordings.length === 0) {
+    console.log('  │  （这次一段都没下到，去 dist\\ 里看看）');
   }
-  if (recording.png) {
-    console.log(`  │  ${recording.png}   ← 顺手截的一张，可以当邮件配图`);
+  for (const r of recordings) {
+    if (r.mp4) {
+      console.log(`  │  ${r.label}：${r.mp4}`);
+    } else {
+      console.log(`  │  ${r.label}：（没下到 mp4，去 dist\\ 里看看）`);
+    }
+    if (r.png) {
+      console.log(`  │              ${r.png}   ← 顺手截的图，可以当邮件配图`);
+    }
   }
   console.log('  │');
-  console.log('  │  这是 iOS 模拟器上的真实录屏，在 GitHub 的云端 macOS 上跑的。');
+  console.log('  │  都是在 GitHub 云端模拟器上真实跑出来的，本机不用装模拟器。');
   console.log('  └─────────────────────────────────────────────────────────');
   console.log('');
-  console.log('  另外，考核「双端原生」的证据也不用另外准备 —— 它们已经在仓库里了：');
-  console.log(`     ${repoUrl}/tree/main/app/android   ← 安卓原生工程`);
-  console.log(`     ${repoUrl}/tree/main/app/ios       ← iOS 原生工程`);
+  console.log('  仓库里还有两个原生工程目录，是「Android + iOS 双端」的代码证据：');
+  console.log(`     ${repoUrl}/tree/main/app/android   ← 安卓工程`);
+  console.log(`     ${repoUrl}/tree/main/app/ios       ← iOS 工程`);
+  console.log('');
+  console.log('  ⚠️ 说清楚：这是 Flutter 一套代码编到两端，不是 Kotlin 和 Swift 各写一套。');
+  console.log('     邮件里写「Flutter 实现 Android + iOS 双端」是准确的；');
+  console.log('     写「双端原生」会被懂行的人追问。');
   console.log('');
   console.log(THIN);
   console.log('  接下来还剩三件事（都不影响你现在就把邮件发出去）：');
@@ -1135,8 +1221,8 @@ async function main() {
   ensureSystemCa();
 
   title('MoneyNote 一键交付');
-  console.log('  目标：自动做出「项目链接 + 应用功能录屏」');
-  console.log('  预计耗时：第一次约 20~30 分钟（大部分时间在等云端的 macOS 编译）');
+  console.log('  目标：自动做出「项目链接 + 双端应用录屏」');
+  console.log('  预计耗时：第一次约 20~35 分钟（两端在 GitHub 上是并行跑的）');
 
   const token = checkEnvironment();
   if (!token) {
@@ -1149,46 +1235,69 @@ async function main() {
   }
 
   try {
+    await resolveOwner(token);
     await ensureRepo(token);
     await pushCode(token);
 
-    step(4, 6, '触发云端的 iOS 构建 + 录屏');
-    info('用的是 GitHub 的免费 macOS 机器，不需要你有 Mac');
-    info(`工作流：.github/workflows/${WORKFLOW_FILE}`);
+    step(4, 6, '触发云端的双端构建 + 录屏');
+    info('iOS 用 GitHub 的 macOS 机器，安卓用 Ubuntu 机器；都不需要你本机装环境');
+    info(`工作流：${WORKFLOWS.map((w) => `.github/workflows/${w.file}`).join('、')}`);
 
     const dispatchedAt = Date.now();
-    await dispatchWorkflow(token);
-    ok('已触发');
+    // 先把两个都触发，再去查各自的 run。
+    // 如果「触发 iOS -> 等找到 iOS 的 run -> 再触发安卓」，安卓会白白晚 1~2 分钟开始。
+    for (const wf of WORKFLOWS) {
+      await dispatchWorkflow(token, wf);
+      ok(`${wf.label}：已触发`);
+    }
 
-    const run = await findRun(token, dispatchedAt);
-    ok(`已找到这次运行（编号 ${run.run_number}）`);
-    info(run.html_url);
+    const jobs = [];
+    for (const wf of WORKFLOWS) {
+      const run = await findRun(token, wf, dispatchedAt);
+      ok(`${wf.label}：运行编号 ${run.run_number}`);
+      info(run.html_url);
+      jobs.push({ wf, run });
+    }
 
     console.log('');
-    console.log('  现在要等 15~25 分钟。这一步是整条路里唯一一个');
+    console.log('  现在要等 15~30 分钟。这一步是整条路里唯一一个');
     console.log('  我没办法在本地替你验证的环节，所以它也是最可能失败的。');
     console.log('  真失败了不要紧 —— 脚本会把怎么把报错交给 AI 写清楚。');
     console.log('');
     console.log('  期间你可以去干别的，但**别关这个窗口**。');
 
-    const finished = await waitForRun(token, run);
+    await waitForRuns(token, jobs);
     console.log('');
     console.log('');
 
-    if (finished.conclusion !== 'success') {
-      const err = new Error(`构建没有成功，结论是「${finished.conclusion}」`);
+    const okJobs = jobs.filter((j) => j.run.conclusion === 'success');
+    const badJobs = jobs.filter((j) => j.run.conclusion !== 'success');
+
+    ok(`构建结束（总用时 ${human(Date.now() - dispatchedAt)}）`);
+
+    // 先下载成功的那一端 —— 就算另一端挂了，也不该白丢这段录屏
+    const recordings = [];
+    for (const job of okJobs) {
+      recordings.push(await fetchRecording(token, job));
+    }
+
+    if (badJobs.length > 0) {
+      const err = new Error(
+        `${badJobs.map((j) => j.wf.label).join('、')} 构建没有成功，` +
+          `结论是「${badJobs.map((j) => j.run.conclusion).join('、')}」`,
+      );
       err.detail =
-        `运行页面：${finished.html_url}\n\n` +
-        '打开它，往下滚，找到第一个打红叉的那一步，把它的日志整段复制给 AI。\n' +
-        '最常见的原因是 Xcode 版本和 Flutter 3.47.7 对不上 —— ' +
-        '如果是这一类，把 ios-build.yml 里的 macos-15 改成 macos-26 再试一次。';
+        badJobs
+          .map((j) => `${j.wf.label}：${j.run.html_url}`)
+          .join('\n') +
+        '\n\n打开链接，往下滚，找到第一个打红叉的那一步，把它的日志整段复制给 AI。\n' +
+        'iOS 最常见的原因是 Xcode 版本和 Flutter 3.47.7 对不上 —— ' +
+        '如果是这一类，把 ios-build.yml 里的 macos-15 改成 macos-26 再试一次。\n' +
+        '安卓最常见的原因是模拟器没起来，看“在云端模拟器里安装、运行、录屏”那一步。';
       throw err;
     }
 
-    ok(`构建成功（用时 ${human(Date.now() - dispatchedAt)}）`);
-
-    const recording = await fetchRecording(token, finished);
-    summary(recording);
+    summary(recordings);
   } catch (e) {
     bail('交付流程', e);
   }

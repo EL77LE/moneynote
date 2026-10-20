@@ -43,9 +43,46 @@ function runIn(cwd, command) {
   return r.status === 0;
 }
 
-/** 命令在不在 PATH 里 */
-function hasCommand(name) {
-  return spawnSync('where', [name], { stdio: 'ignore', shell: true }).status === 0;
+/**
+ * 找到 flutter 可执行文件的完整路径；找不到返回 null。
+ *
+ * 为什么不能只依赖 PATH：Flutter 装完之后**不会自动进 PATH**，
+ * 官方文档是让用户自己手动加，而「加了 PATH 但没重开终端」又是另一个常见坑。
+ * 这台机器就是这种情况 —— SDK 在 C:\src\flutter，`where flutter` 却是空的。
+ * 与其让用户先去配环境变量，不如直接去几个常见位置找一遍。
+ */
+function findFlutter() {
+  const isWin = process.platform === 'win32';
+  const exe = isWin ? 'flutter.bat' : 'flutter';
+
+  // 1) PATH 里已经有（理想情况）。Windows 用 where，macOS/Linux 用 which。
+  const onPath = spawnSync(isWin ? 'where' : 'which', ['flutter'], {
+    encoding: 'utf8',
+    shell: true,
+  });
+  if (onPath.status === 0) {
+    const first = (onPath.stdout ?? '')
+      .split(/\r?\n/)
+      .map((l) => l.trim())
+      .filter(Boolean)[0];
+    if (first && existsSync(first)) return first;
+  }
+
+  // 2) 常见的 SDK 安装位置
+  const candidates = [
+    process.env.FLUTTER_ROOT && join(process.env.FLUTTER_ROOT, 'bin', exe),
+    process.env.LOCALAPPDATA && join(process.env.LOCALAPPDATA, 'flutter', 'bin', exe),
+    process.env.USERPROFILE && join(process.env.USERPROFILE, 'flutter', 'bin', exe),
+    process.env.HOME && join(process.env.HOME, 'flutter', 'bin', exe),
+    isWin ? 'C:\\flutter\\bin\\flutter.bat' : '/usr/local/flutter/bin/flutter',
+    isWin ? 'C:\\src\\flutter\\bin\\flutter.bat' : '/opt/flutter/bin/flutter',
+    isWin ? 'D:\\flutter\\bin\\flutter.bat' : null,
+  ].filter(Boolean);
+
+  for (const p of candidates) {
+    if (existsSync(p)) return p;
+  }
+  return null;
 }
 
 function check(name, label) {
@@ -81,14 +118,20 @@ if (!nodeOk) {
   process.exit(1);
 }
 
-if (!hasCommand('flutter')) {
+const flutter = findFlutter();
+if (!flutter) {
   console.log('[FAIL] 找不到 flutter 命令。');
-  console.log('       装好 Flutter SDK 后要把它的 bin 目录加进 PATH，');
-  console.log('       然后【重开这个窗口】—— PATH 改了不重开是不生效的。');
-  console.log('       详见 docs/01-环境搭建.md');
+  console.log('       已经自动找过这些地方：PATH、FLUTTER_ROOT、');
+  console.log('       %LOCALAPPDATA%\\flutter、%USERPROFILE%\\flutter、C:\\flutter、C:\\src\\flutter。');
+  console.log('       都没有的话，说明 Flutter SDK 还没装：见 docs/01-环境搭建.md');
+  console.log('       装了但装在别处？把它的 bin 目录加进 PATH，然后【重开这个窗口】。');
   console.log('');
   process.exit(1);
 }
+// 路径里可能有空格（比如 C:\Program Files\flutter），必须整体加引号
+const flutterCmd = `"${flutter}"`;
+console.log(`Flutter：${flutter}`);
+console.log('');
 
 /* --------------------------- 1. 工作流检查 --------------------------- */
 
@@ -127,7 +170,7 @@ console.log(thin);
 if (!existsSync(join(ROOT, 'app', '.dart_tool'))) {
   console.log('      第一次跑，先拉依赖...');
   console.log('');
-  if (!runIn('app', 'flutter pub get')) {
+  if (!runIn('app', `${flutterCmd} pub get`)) {
     console.log('');
     console.log('[FAIL] flutter pub get 失败 —— 多半是网络，见 docs/01-环境搭建.md 的镜像配置');
     process.exit(1);
@@ -137,14 +180,14 @@ if (!existsSync(join(ROOT, 'app', '.dart_tool'))) {
 
 // --no-fatal-infos：info 级的风格提示不算失败（不管也能跑）。
 // warning 和 error 仍然会让它失败 —— 那两个基本都是真问题。
-check(runIn('app', 'flutter analyze --no-fatal-infos'), '静态检查通过');
+check(runIn('app', `${flutterCmd} analyze --no-fatal-infos`), '静态检查通过');
 
 /* ---------------------------- 4. 单元测试 ---------------------------- */
 
 console.log('[4/4] App 单元测试');
 console.log(thin);
 
-check(runIn('app', 'flutter test'), '单元测试通过');
+check(runIn('app', `${flutterCmd} test`), '单元测试通过');
 
 /* ------------------------------ 总结 ------------------------------ */
 

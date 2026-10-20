@@ -1,0 +1,35 @@
+# 给"自己的服务器 / VPS"用的一键部署。
+#
+# 用法（在 backend/ 目录下）：
+#   docker compose up -d --build
+#
+# 为什么要有 volumes：
+#   SQLite 的数据库就是一个文件。不挂 volume 的话，容器一删数据就没了。
+#   这里把 ./data 挂到 /app/data，数据库就落在宿主机上，重启/重建容器都还在。
+#
+# 为什么要有 AUTO_SEED：
+#   第一次启动时库是空的，自动灌一批演示数据，打开 App 不会看到空账本。
+#   它只在空库时动手，不会清掉已有数据。
+services:
+  api:
+    build: .
+    ports:
+      - "3000:3000"
+    environment:
+      AUTO_SEED: "1"
+      # 上线后建议把下面这行改成你的网页版域名（多个用逗号分隔）。
+      # 不配就是允许所有来源，方便本地调试。
+      # CORS_ORIGIN: "https://你的用户名.github.io"
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

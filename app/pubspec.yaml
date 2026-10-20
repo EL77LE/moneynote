@@ -1,5 +1,5 @@
 name: money_note
-description: "MoneyNote —— 用 AI 协作完成的 Android / iOS 双端原生记账 App"
+description: "MoneyNote —— 用 AI 协作完成的 Flutter 跨平台记账 App（Android + iOS）"
 publish_to: 'none'
 version: 1.0.0+1
 

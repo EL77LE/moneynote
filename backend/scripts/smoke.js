@@ -167,6 +167,10 @@ async function main() {
       // 表上的 CHECK (amount_cents > 0)，之前会变成 500 而不是 400。
       ['amount = 0.001（不足一分）', { type: 'expense', amount: 0.001, category: '餐饮', date: '2026-10-15' }, 'BAD_AMOUNT'],
       ['amount = 0.004（不足一分）', { type: 'expense', amount: 0.004, category: '餐饮', date: '2026-10-15' }, 'BAD_AMOUNT'],
+      // 0.005 四舍五入后是 1 分，曾经会被收下并存成 0.01 ——
+      // 用户输 0.005，回显 0.01，属于"悄悄改掉你的输入"。
+      // API 的最小单位是 0.01，所以这里也必须 400。
+      ['amount = 0.005（会四舍五入成 1 分）', { type: 'expense', amount: 0.005, category: '餐饮', date: '2026-10-15' }, 'BAD_AMOUNT'],
       ['type = 乱填', { type: 'xxx', amount: 10, category: '餐饮', date: '2026-10-15' }, 'BAD_TYPE'],
       ['category 为空', { type: 'expense', amount: 10, category: '  ', date: '2026-10-15' }, 'BAD_CATEGORY'],
       ['date 格式错', { type: 'expense', amount: 10, category: '餐饮', date: '2026/10/15' }, 'BAD_DATE'],
@@ -283,6 +287,9 @@ async function main() {
 
     const half = await req('GET', '/api/records?from=2026-10-01');
     check('只有 from -> 400', half.status === 400, `实际 ${half.status}`);
+
+    const fakeDate = await req('GET', '/api/records?from=2026-02-30&to=2026-03-01');
+    check('from/to 里不存在的日期 -> 400', fakeDate.status === 400, `实际 ${fakeDate.status}`);
 
     const badLimit = await req('GET', '/api/records?limit=99999');
     check('limit 越界 -> 400', badLimit.status === 400, `实际 ${badLimit.status}`);

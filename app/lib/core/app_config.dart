@@ -40,6 +40,16 @@ class AppConfig {
   /// 单个请求的超时时间。太长会让"后端挂了"表现为界面卡死。
   static const Duration requestTimeout = Duration(seconds: 8);
 
+  /// 录屏演示模式。
+  ///
+  /// **只给 CI 录屏用**：GitHub Actions 里构建时传
+  /// `--dart-define=DEMO_MODE=true`，App 启动后会自动走一遍
+  /// 首页 → 记一笔 → 保存 → 统计 → 切月份，让 45 秒录屏里有真实功能，
+  /// 而不是只停在首页。
+  ///
+  /// 默认 false，所以正常安装包、单元测试、Web 版都不会自动演示。
+  static const bool demoMode = bool.fromEnvironment('DEMO_MODE');
+
   /// 配置自检：把"一定会失败"的配置提前拦下来，给一句人话。
   /// 没问题时返回 null。
   ///

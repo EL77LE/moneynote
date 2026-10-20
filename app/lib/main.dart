@@ -1,3 +1,5 @@
+import 'dart:async';
+
 import 'package:flutter/material.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
@@ -5,6 +7,7 @@ import 'core/app_config.dart';
 import 'data/api_client.dart';
 import 'data/local_cache.dart';
 import 'data/repository.dart';
+import 'demo/demo_tour.dart';
 import 'pages/root_page.dart';
 import 'state/app_state.dart';
 import 'theme.dart';
@@ -26,6 +29,12 @@ class MoneyNoteApp extends StatefulWidget {
 class _MoneyNoteAppState extends State<MoneyNoteApp> {
   late final AppState _state;
 
+  // 录屏演示需要在没有手指点击的情况下跳页面、切 Tab，
+  // 所以这两个 Key 只在 DEMO_MODE 下会被用到。
+  final GlobalKey<NavigatorState> _navigatorKey = GlobalKey<NavigatorState>();
+  final GlobalKey<RootPageState> _rootKey = GlobalKey<RootPageState>();
+  DemoVideoTour? _demoTour;
+
   @override
   void initState() {
     super.initState();
@@ -40,10 +49,23 @@ class _MoneyNoteAppState extends State<MoneyNoteApp> {
 
     // 不等它返回，先让界面渲染出来。加载中的状态由 AppState 自己通知。
     _state.load();
+
+    if (AppConfig.demoMode) {
+      final tour = DemoVideoTour(
+        state: _state,
+        navigatorKey: _navigatorKey,
+        rootKey: _rootKey,
+      );
+      _demoTour = tour;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        unawaited(tour.start());
+      });
+    }
   }
 
   @override
   void dispose() {
+    _demoTour?.dispose();
     _state.dispose();
     super.dispose();
   }
@@ -57,6 +79,7 @@ class _MoneyNoteAppState extends State<MoneyNoteApp> {
       child: MaterialApp(
         title: 'MoneyNote',
         debugShowCheckedModeBanner: false,
+        navigatorKey: _navigatorKey,
         theme: buildTheme(Brightness.light),
         darkTheme: buildTheme(Brightness.dark),
         themeMode: ThemeMode.system,
@@ -71,7 +94,7 @@ class _MoneyNoteAppState extends State<MoneyNoteApp> {
           GlobalWidgetsLocalizations.delegate,
           GlobalCupertinoLocalizations.delegate,
         ],
-        home: const RootPage(),
+        home: RootPage(key: _rootKey),
       ),
     );
   }

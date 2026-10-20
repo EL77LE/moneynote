@@ -1,6 +1,6 @@
 # 03 · 把 App 跑起来
 
-目标：模拟器里看到首页、60 多条流水、能记一笔、统计页有图。
+目标：模拟器里看到首页、几十条流水、能记一笔、统计页有图。
 
 **预计耗时：1～2 小时**（大部分时间在等 Gradle 第一次下载依赖）。
 
@@ -50,7 +50,7 @@ flutter test         # 跑单元测试
 
 - `flutter pub get` → `Got dependencies!`
 - `flutter analyze` → **`No issues found!`**
-- `flutter test` → **`All tests passed!`**（47 个测试）
+- `flutter test` → **`All tests passed!`**（54 个测试）
 
 > **嫌上面三条命令麻烦？** 项目根目录有个 `run-tests.bat`，双击它就行 ——
 > 它会把后端接口测试和上面这三步一次跑完，最后打印一行结论。
