@@ -1,0 +1,55 @@
+name: 后端保活
+
+# 作用：每 5 分钟访问一次 Render 后端，避免免费实例 15 分钟无流量后休眠。
+# 电脑关机、手机换网络都不影响；这是 GitHub 的机器在跑。
+#
+# 如果 Render 给你的域名不是 moneynote-api.onrender.com：
+#   GitHub 仓库 → Settings → Secrets and variables → Actions → Variables
+#   新建 BACKEND_URL = https://你的服务.onrender.com
+#
+# 说明：免费档 + 保活是「实际可用」，不是云厂商的 SLA 承诺。
+# 要严格 always-on，请把 render.yaml 的 plan 改成 starter（付费）。
+
+on:
+  schedule:
+    # GitHub 的 cron 用 UTC；*/5 表示每 5 分钟。
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+
+permissions: {}
+
+concurrency:
+  group: backend-keep-alive
+  cancel-in-progress: false
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: 访问 /api/health
+        env:
+          BACKEND_URL: ${{ vars.BACKEND_URL || 'https://moneynote-api.onrender.com' }}
+        run: |
+          URL="${BACKEND_URL%/}/api/health"
+          echo "保活地址：$URL"
+
+          for attempt in 1 2 3; do
+            echo "第 $attempt 次请求..."
+            CODE=$(curl -sS -o /tmp/health.json -w '%{http_code}' --max-time 60 "$URL" || true)
+            BODY=$(cat /tmp/health.json 2>/dev/null || true)
+            echo "HTTP $CODE $BODY"
+
+            if [ "$CODE" = "200" ] && printf '%s' "$BODY" | grep -q '"ok":true'; then
+              echo "后端在线，保活完成。"
+              exit 0
+            fi
+
+            sleep 15
+          done
+
+          echo "后端连续 3 次没有正常响应。"
+          echo "去 Render 看服务是否被暂停、域名是否写对；"
+          echo "也可以在 GitHub 的 Variables 里设置 BACKEND_URL。"
+          exit 1

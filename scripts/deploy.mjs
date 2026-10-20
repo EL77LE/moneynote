@@ -1146,6 +1146,8 @@ function summary(recordings) {
   console.log('');
   console.log('   1. 部署后端到云端 —— 让「电脑关机了 App 还能用」，也让 APK 发给别人能直接用');
   console.log('      看 docs/15-双端原生一键交付.md 第 2、3 节。约 15 分钟，免费。');
+  console.log('      仓库自带的 keep-alive.yml 会每 5 分钟 ping 一次，电脑关机也不会休眠；');
+  console.log('      Render 域名不是 moneynote-api.onrender.com 时，设 GitHub 变量 BACKEND_URL。');
   console.log('');
   console.log('   2. 网页版 —— 面试官点开就能玩，不用装任何东西。转化率最高的一项');
   console.log('      看 docs/12-部署到网页端.md。');

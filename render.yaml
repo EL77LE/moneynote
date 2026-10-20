@@ -14,6 +14,8 @@ services:
   - type: web
     name: moneynote-api
     runtime: node
+    # 免费档 15 分钟无流量会休眠；仓库里的 keep-alive.yml 每 5 分钟 ping 一次。
+    # 要严格 always-on：把 free 改成 starter，并在 Render 绑定付款方式（付费）。
     plan: free
     region: singapore # 离国内最近的节点
     rootDir: backend

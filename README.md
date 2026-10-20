@@ -47,7 +47,10 @@ set API_BASE_URL=https://你的服务.onrender.com
 
 这样 Android 正常版 APK 会编译成连公网后端，装到手机上后**这台电脑关机也不影响使用**。iOS 真机安装需要 Apple 签名；本次交付的 iOS 证据是模拟器录屏。
 
-> Render 免费实例约 15 分钟无访问会休眠，首次唤醒 30~60 秒。SQLite 在免费实例上是临时磁盘，重启会清空，后端启动时会用 `AUTO_SEED=1` 自动补演示数据。
+仓库自带 `.github/workflows/keep-alive.yml`，每 5 分钟 ping 一次 `/api/health`，电脑关机也能保持 Render 免费实例不休眠。Render 域名不是 `moneynote-api.onrender.com` 时，在 GitHub 仓库 Variables 里设置 `BACKEND_URL`。
+
+> 免费实例 + 保活是「实际可用」，不是 SLA。要严格 always-on，把 `render.yaml` 的 `plan: free` 改成 `plan: starter`（付费，约 $7/月），付费实例不会休眠。
+> SQLite 在免费实例上是临时磁盘，重启会清空，后端启动时会用 `AUTO_SEED=1` 自动补演示数据。
 
 ---
 
