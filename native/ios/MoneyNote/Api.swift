@@ -2,13 +2,14 @@ import Foundation
 
 enum ApiClient {
     /// CI 用 SIMCTL_CHILD_API_BASE_URL 指向本机后端；
-    /// 模拟器本地运行默认 localhost，真机默认云端。地址末尾斜杠自动去掉。
+    /// 模拟器本地运行默认 localhost。真机请把下面 example 换成你的
+    /// Cloudflare Workers 子域，或启动时设置 API_BASE_URL。地址末尾斜杠自动去掉。
     static var baseURL: String {
         let raw = ProcessInfo.processInfo.environment["API_BASE_URL"] ?? ""
         #if targetEnvironment(simulator)
         let fallback = "http://localhost:3000"
         #else
-        let fallback = "https://moneynote-api.onrender.com"
+        let fallback = "https://moneynote-api.example.workers.dev"
         #endif
         let value = raw.isEmpty ? fallback : raw
         return value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

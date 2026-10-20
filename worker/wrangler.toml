@@ -1,0 +1,12 @@
+# Cloudflare Worker 配置模板。
+# 不要直接改 database_id；运行「一键部署Cloudflare.bat」会生成
+# worker/wrangler.generated.toml，把真实的 D1 id 填进去并使用它。
+name = "moneynote-api"
+main = "src/index.js"
+compatibility_date = "2025-01-01"
+workers_dev = true
+
+[[d1_databases]]
+binding = "DB"
+database_name = "moneynote-d1"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"

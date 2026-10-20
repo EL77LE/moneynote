@@ -32,6 +32,13 @@ REM ===================================================================
 chcp 65001 >nul 2>&1
 cd /d "%~dp0"
 
+REM If Cloudflare has been deployed, use its URL automatically for
+REM the normal Android APK. Without this file the build still works,
+REM but the APK points at the emulator-only local backend.
+if exist "dist\cloudflare-url.txt" (
+  set /p API_BASE_URL=<"dist\cloudflare-url.txt"
+)
+
 node "scripts\deploy.mjs"
 set "EXITCODE=%ERRORLEVEL%"
 

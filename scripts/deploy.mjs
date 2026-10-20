@@ -39,10 +39,10 @@
  *      这个脚本会把创建页面直接给你打开、scope 预先填好，你只需要
  *      点一下 Generate、复制、粘贴。一次 30 秒，之后永久免。
  *
- *   2. Render 账号（部署后端到云端）
- *      Render 的「授权连接 GitHub」是 OAuth 流程，只能在浏览器里点。
- *      所以后端部署没有塞进这个脚本（塞进来会让「双击就好」卡在一个
- *      自动化不了的地方），而是在第 6 步的清单里指路到 docs/06。
+ *   2. Cloudflare 账号（只在「一键部署Cloudflare.bat」里登录一次）
+ *      线上后端用 Cloudflare Workers + D1，不依赖任何一台开着的电脑。
+ *      后端部署没有塞进这个脚本，因为它要浏览器 OAuth 授权；
+ *      先跑一次那个 bat，本脚本会自动读取 dist/cloudflare-url.txt。
  *
  * ---------------------------------------------------------------------------
  * 关于令牌的存放（重要）
@@ -82,6 +82,23 @@ const REPO = (process.env.GITHUB_REPO ?? '').trim() || 'moneynote';
 const BRANCH = 'main';
 
 /**
+ * Cloudflare 一键部署会把 Worker 地址写到这里。
+ * 这样直接运行 `node scripts/deploy.mjs` 也能自动带上公网后端，
+ * 不必依赖 .bat 里的 set /p。
+ */
+function cloudflareUrlFromFile() {
+  try {
+    return readFileSync(join(ROOT, 'dist', 'cloudflare-url.txt'), 'utf8').trim();
+  } catch {
+    return '';
+  }
+}
+
+const API_BASE_URL = (
+  (process.env.API_BASE_URL ?? '').trim() || cloudflareUrlFromFile()
+).replace(/\/+$/, '');
+
+/**
  * 要触发的两个工作流。
  *
  * 为什么两个都触发：招聘要的是「双端」。iOS 和安卓各有一段云端模拟器录屏，
@@ -113,7 +130,7 @@ const WORKFLOWS = [
       record_seconds: '45',
       // 配了公网后端就顺手编一个能装真机的 APK；没配就留空，走模拟器模式。
       // 末尾斜杠会拼出 //api/...，这里顺手去掉（和原生 ApiClient 的行为一致）。
-      api_base_url: (process.env.API_BASE_URL ?? '').trim().replace(/\/+$/, ''),
+      api_base_url: API_BASE_URL,
     },
   },
 ];
@@ -700,7 +717,7 @@ async function ensureRepo(token) {
     method: 'POST',
     body: {
       name: REPO,
-      description: 'Android 原生（Kotlin + Compose）+ iOS 原生（SwiftUI）记账 App + Node.js 后端',
+      description: 'Android 原生（Kotlin + Compose）+ iOS 原生（SwiftUI）记账 App + Cloudflare Workers/D1 后端',
       private: false,
       // auto_init: false 是关键 —— 让它别自动生成 README。
       // 一旦远端有了提交，我们本地的 push 就会被拒（non-fast-forward），
@@ -1126,9 +1143,9 @@ function summary(recordings) {
     for (const apk of apks) {
       console.log(`  │  ${apk}`);
     }
-    if (!process.env.API_BASE_URL) {
+    if (!API_BASE_URL) {
       console.log('  │  ⚠️ 这次没设 API_BASE_URL：APK 连的是模拟器地址 10.0.2.2，真机不能用。');
-      console.log('  │     先部署 Render，再 set API_BASE_URL=... 重跑一次（见 docs/15）。');
+      console.log('  │     先双击 一键部署Cloudflare.bat，再重跑 一键交付.bat（见 docs/15）。');
     } else {
       console.log('  │  已按 API_BASE_URL 编译，装到安卓手机可直接连公网。');
     }
@@ -1144,18 +1161,16 @@ function summary(recordings) {
   console.log(THIN);
   console.log('  接下来还剩三件事（都不影响你现在就把邮件发出去）：');
   console.log('');
-  console.log('   1. 部署后端到云端 —— 让「电脑关机了 App 还能用」，也让 APK 发给别人能直接用');
-  console.log('      看 docs/15-双端原生一键交付.md 第 2、3 节。约 15 分钟，免费。');
-  console.log('      仓库自带的 keep-alive.yml 会每 5 分钟 ping 一次，电脑关机也不会休眠；');
-  console.log('      Render 域名不是 moneynote-api.onrender.com 时，设 GitHub 变量 BACKEND_URL。');
+  console.log('   1. 部署线上后端 —— 双击 一键部署Cloudflare.bat，再重跑一次本文件');
+  console.log('      让「电脑关机了 App 还能用」，也让 APK 发给别人能直接用。');
+  console.log('      看 docs/15-双端原生一键交付.md 第 2、3 节。免费，且不会休眠。');
   console.log('');
   console.log('   2. 网页版 —— 面试官点开就能玩，不用装任何东西。转化率最高的一项');
   console.log('      看 docs/12-部署到网页端.md。');
   console.log('');
   console.log('   3. 写邮件 —— 看 docs/07-发邮件给HR.md，收件人 ltx@techlz.com');
   console.log('');
-  console.log('  ⚠️ 录屏已经下到本地了，所以 Render 那边休眠、丢数据都不影响你手上这一段。');
-  console.log('     但如果你想再录一次，记得先打开后端地址把服务唤醒（它会睡）。');
+  console.log('  ✅ 录屏已经下到本地；Cloudflare 后端和 D1 都不会因为没人访问而休眠/清空。');
   console.log('');
 }
 

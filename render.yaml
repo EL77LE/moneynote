@@ -1,4 +1,8 @@
-# Render 部署配置（可选步骤，只在你需要「公网可访问的链接」时才用）
+# Render 部署配置（备用，不推荐作为主交付）
+#
+# 线上主后端已改为 Cloudflare Workers + D1，见 worker/ 和
+# 「一键部署Cloudflare.bat」。Render 免费实例 15 分钟无访问会休眠，
+# 还要额外配保活；这里仅保留给需要备用平台时使用。
 #
 # 用法：把整个仓库推到 GitHub，然后在 Render 里选 New -> Blueprint，
 # 指向这个仓库，它会自动读到本文件。
@@ -14,8 +18,6 @@ services:
   - type: web
     name: moneynote-api
     runtime: node
-    # 免费档 15 分钟无流量会休眠；仓库里的 keep-alive.yml 每 5 分钟 ping 一次。
-    # 要严格 always-on：把 free 改成 starter，并在 Render 绑定付款方式（付费）。
     plan: free
     region: singapore # 离国内最近的节点
     rootDir: backend
