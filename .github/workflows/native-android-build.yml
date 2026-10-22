@@ -100,22 +100,13 @@ jobs:
           arch: x86_64
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -no-snapshot
           disable-animations: false
+          # 注意：android-emulator-runner 会把 script 按行分别交给 sh -c 执行，
+          # 多行的 if/then/fi 会在第一行就报 "end of file unexpected"，
+          # 变量和后台 PID 也不会跨行保留。所以录屏逻辑必须写成单行，
+          # 并让 screenrecord、启动 App、等待都在同一个 adb shell 会话里完成。
           script: |
-            set -e
-            DURATION="${RECORD_SECONDS:-45}"
-            if ! echo "$DURATION" | grep -Eq '^[0-9]+$' || [ "$DURATION" -lt 10 ] || [ "$DURATION" -gt 180 ]; then
-              echo "录屏时长不合法，改用 45 秒"
-              DURATION=45
-            fi
-
             adb install -r moneynote-native-demo.apk
-            adb shell screenrecord --size 720x1280 --bit-rate 3000000 --time-limit "$DURATION" /sdcard/native-demo.mp4 &
-            REC_PID=$!
-            sleep 3
-            adb shell am start -W -n com.moneynote.nativeapp/.MainActivity
-            sleep "$DURATION"
-            wait "$REC_PID" || true
-
+            adb shell "screenrecord --size 720x1280 --bit-rate 3000000 --time-limit 45 /sdcard/native-demo.mp4 & sleep 3; am start -W -n com.moneynote.nativeapp/.MainActivity; sleep 45"
             adb exec-out screencap -p > native-screenshot.png
             adb pull /sdcard/native-demo.mp4 native-demo.mp4
             ls -lh native-demo.mp4 native-screenshot.png

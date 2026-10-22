@@ -773,7 +773,12 @@ async function pushCode(token) {
   // 把"推一次，失败就 throw"包成一个函数交给 retry，
   // 重试的编排就不用掺进这段主流程里。
   const pushOnce = () => {
-    const res = git(['push', pushUrl, `${BRANCH}:${BRANCH}`]);
+    // Windows 上 Git for Windows 默认用 OpenSSL 自带 CA 库，认不出
+    // 杀毒软件/公司代理注入的本地根证书，会报
+    // "SSL certificate problem: unable to get local issuer certificate"。
+    // 改用 Windows 系统证书库（schannel）即可，且只影响这一次命令。
+    const sslArgs = process.platform === 'win32' ? ['-c', 'http.sslBackend=schannel'] : [];
+    const res = git([...sslArgs, 'push', pushUrl, `${BRANCH}:${BRANCH}`]);
     if (res.ok) return res;
 
     const err = new Error('git push 失败');
