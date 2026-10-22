@@ -104,11 +104,16 @@ jobs:
           # 多行的 if/then/fi 会在第一行就报 "end of file unexpected"，
           # 变量和后台 PID 也不会跨行保留。所以录屏逻辑必须写成单行，
           # 并让 screenrecord、启动 App、等待都在同一个 adb shell 会话里完成。
+          # 另外不要写 /sdcard：部分 CI 模拟器启动时 /sdcard 还没挂好，
+          # 会报 Transport endpoint is not connected；/data/local/tmp 始终可写。
           script: |
             adb install -r moneynote-native-demo.apk
-            adb shell "screenrecord --size 720x1280 --bit-rate 3000000 --time-limit 45 /sdcard/native-demo.mp4 & sleep 3; am start -W -n com.moneynote.nativeapp/.MainActivity; sleep 45"
+            adb shell am force-stop com.moneynote.nativeapp
+            adb shell wm dismiss-keyguard
+            adb shell "rm -f /data/local/tmp/native-demo.mp4; am start -n com.moneynote.nativeapp/.MainActivity; sleep 2; screenrecord --size 720x1280 --bit-rate 3000000 --time-limit 45 /data/local/tmp/native-demo.mp4"
+            adb shell "ls -lh /data/local/tmp/native-demo.mp4"
             adb exec-out screencap -p > native-screenshot.png
-            adb pull /sdcard/native-demo.mp4 native-demo.mp4
+            adb pull /data/local/tmp/native-demo.mp4 native-demo.mp4
             ls -lh native-demo.mp4 native-screenshot.png
 
       - name: 后端日志

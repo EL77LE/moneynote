@@ -70,7 +70,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun MoneyNoteRoot() {
-    val store = remember { MoneyNoteStore() }
+    val store = remember { MoneyNoteStore(BuildConfig.DEMO_MODE) }
 
     LaunchedEffect(Unit) { store.load() }
 
