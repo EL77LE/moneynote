@@ -32,7 +32,7 @@ dist\moneynote-native.apk  Android 安装包
 dist\cloudflare-url.txt    线上后端地址（部署 Cloudflare 后生成）
 ```
 
-第一次运行前，先按 **[docs/15-双端原生一键交付.md](docs/15-双端原生一键交付.md)** 换一个 GitHub token。旧 token 如果曾经出现在聊天/截图里，先去 GitHub 撤销。
+第一次运行前，双击 **`一键获取GitHubToken.bat`**：浏览器会打开已经预选好 `repo` + `workflow` 权限的 GitHub token 页面，登录后点 **Generate token**，复制，回到窗口按回车即可。脚本会自动保存到 `secrets\token.txt`，不经过聊天。旧 token 如果曾经出现在聊天/截图里，先去 GitHub 撤销。
 
 > 想让 APK 一次就连公网：先做下面的「云端后端」，再回来双击 `一键交付.bat`。
 

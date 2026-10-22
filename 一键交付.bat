@@ -39,6 +39,19 @@ if exist "dist\cloudflare-url.txt" (
   set /p API_BASE_URL=<"dist\cloudflare-url.txt"
 )
 
+REM No token yet? Open the helper first. It saves the token safely.
+if not exist "secrets\token.txt" (
+  echo.
+  echo No GitHub token found. Opening the token helper...
+  powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0scripts\github-token.ps1"
+  if errorlevel 1 (
+    echo.
+    echo Token was not saved. Delivery stopped.
+    if /i not "%~1"=="nopause" pause
+    exit /b 1
+  )
+)
+
 node "scripts\deploy.mjs"
 set "EXITCODE=%ERRORLEVEL%"
 
