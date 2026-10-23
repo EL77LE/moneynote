@@ -9,7 +9,7 @@ enum ApiClient {
         #if targetEnvironment(simulator)
         let fallback = "http://localhost:3000"
         #else
-        let fallback = "https://moneynote-api.example.workers.dev"
+        let fallback = "https://moneynote-api.cold-manatee.workers.dev"
         #endif
         let value = raw.isEmpty ? fallback : raw
         return value.trimmingCharacters(in: CharacterSet(charactersIn: "/"))

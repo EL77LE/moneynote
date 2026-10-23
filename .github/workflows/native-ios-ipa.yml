@@ -1,0 +1,82 @@
+name: iOS unsigned IPA
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-ipa:
+    runs-on: macos-15
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Generate Xcode project
+        working-directory: native/ios
+        run: xcodegen generate
+
+      - name: Build device app without signing
+        working-directory: native/ios
+        run: |
+          set -e
+          xcodebuild \
+            -project MoneyNote.xcodeproj \
+            -scheme MoneyNote \
+            -configuration Release \
+            -sdk iphoneos \
+            -derivedDataPath build \
+            ARCHS=arm64 \
+            ONLY_ACTIVE_ARCH=NO \
+            CODE_SIGNING_ALLOWED=NO \
+            CODE_SIGNING_REQUIRED=NO \
+            CODE_SIGN_IDENTITY="" \
+            build
+
+          APP="build/Build/Products/Release-iphoneos/MoneyNote.app"
+          test -d "$APP"
+          mkdir -p build/Payload
+          cp -R "$APP" build/Payload/
+          cd build
+          zip -qry MoneyNote-unsigned.ipa Payload
+          test -s MoneyNote-unsigned.ipa
+          shasum -a 256 MoneyNote-unsigned.ipa | tee MoneyNote-unsigned.ipa.sha256
+          ls -lh MoneyNote-unsigned.ipa
+
+      - name: Write install notes
+        run: |
+          cat > native/ios/build/README.txt <<'EOF'
+          MoneyNote unsigned IPA
+          ======================
+
+          This IPA is NOT signed. A normal iPhone will not install it directly.
+          Sign it with your own Apple ID using Sideloadly (Windows or macOS):
+
+          1. Install Sideloadly from https://sideloadly.io/
+          2. Connect the iPhone with a USB cable.
+          3. Drag MoneyNote-unsigned.ipa into Sideloadly.
+          4. Enter your Apple ID when asked.
+          5. Click Start. Then trust the developer certificate on the iPhone:
+             Settings > General > VPN & Device Management.
+          6. Free Apple IDs expire after 7 days; re-sign to keep using it.
+
+          The app calls:
+          https://moneynote-api.cold-manatee.workers.dev
+
+          Bundle ID: com.moneynote.native
+          EOF
+          cat native/ios/build/README.txt
+
+      - name: Upload IPA
+        uses: actions/upload-artifact@v4
+        with:
+          name: native-ios-ipa
+          path: |
+            native/ios/build/MoneyNote-unsigned.ipa
+            native/ios/build/MoneyNote-unsigned.ipa.sha256
+            native/ios/build/README.txt
+          retention-days: 30
+          if-no-files-found: error
